@@ -381,12 +381,12 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 	}
 
 	private void cleanInstanceBasePath() {
-		LOG.info("Deleting existing instance base directory {}.", instanceBasePath);
+		LOG.info("Closed RocksDB State Backend. Cleaning up RocksDB working directory {}.", instanceBasePath);
 
 		try {
 			FileUtils.deleteDirectory(instanceBasePath);
 		} catch (IOException ex) {
-			LOG.warn("Could not delete instance base path for RocksDB: " + instanceBasePath, ex);
+			LOG.warn("Could not delete RocksDB working directory: {}", instanceBasePath, ex);
 		}
 	}
 
@@ -462,6 +462,13 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 		if (savepointSnapshotStrategy != null) {
 			savepointSnapshotStrategy.notifyCheckpointComplete(completedCheckpointId);
 		}
+	}
+
+	@Override
+	public void notifyCheckpointAborted(long checkpointId) throws Exception {
+		checkpointSnapshotStrategy.notifyCheckpointAborted(checkpointId);
+
+		savepointSnapshotStrategy.notifyCheckpointAborted(checkpointId);
 	}
 
 	/**

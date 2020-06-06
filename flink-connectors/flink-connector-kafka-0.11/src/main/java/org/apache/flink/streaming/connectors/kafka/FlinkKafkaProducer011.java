@@ -44,7 +44,6 @@ import org.apache.flink.streaming.connectors.kafka.internal.TransactionalIdsGene
 import org.apache.flink.streaming.connectors.kafka.internal.metrics.KafkaMetricMutableWrapper;
 import org.apache.flink.streaming.connectors.kafka.internals.KeyedSerializationSchemaWrapper;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkFixedPartitioner;
-import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaDelegatePartitioner;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
 import org.apache.flink.util.ExceptionUtils;
@@ -616,6 +615,11 @@ public class FlinkKafkaProducer011<IN>
 			};
 		}
 
+		if (schema instanceof KeyedSerializationSchemaWrapper) {
+			((KeyedSerializationSchemaWrapper<IN>) schema).getSerializationSchema()
+				.open(() -> getRuntimeContext().getMetricGroup().addGroup("user"));
+		}
+
 		super.open(configuration);
 	}
 
@@ -978,10 +982,6 @@ public class FlinkKafkaProducer011<IN>
 		RuntimeContext ctx = getRuntimeContext();
 
 		if (flinkKafkaPartitioner != null) {
-			if (flinkKafkaPartitioner instanceof FlinkKafkaDelegatePartitioner) {
-				((FlinkKafkaDelegatePartitioner) flinkKafkaPartitioner).setPartitions(
-					getPartitionsByTopic(this.defaultTopicId, producer));
-			}
 			flinkKafkaPartitioner.open(ctx.getIndexOfThisSubtask(), ctx.getNumberOfParallelSubtasks());
 		}
 
@@ -1083,7 +1083,7 @@ public class FlinkKafkaProducer011<IN>
 	 */
 	@VisibleForTesting
 	@Internal
-	static class KafkaTransactionState {
+	public static class KafkaTransactionState {
 
 		private final transient FlinkKafkaProducer<byte[], byte[]> producer;
 
@@ -1094,15 +1094,21 @@ public class FlinkKafkaProducer011<IN>
 
 		final short epoch;
 
-		KafkaTransactionState(String transactionalId, FlinkKafkaProducer<byte[], byte[]> producer) {
+		@VisibleForTesting
+		@Internal
+		public KafkaTransactionState(String transactionalId, FlinkKafkaProducer<byte[], byte[]> producer) {
 			this(transactionalId, producer.getProducerId(), producer.getEpoch(), producer);
 		}
 
-		KafkaTransactionState(FlinkKafkaProducer<byte[], byte[]> producer) {
+		@VisibleForTesting
+		@Internal
+		public KafkaTransactionState(FlinkKafkaProducer<byte[], byte[]> producer) {
 			this(null, -1, (short) -1, producer);
 		}
 
-		KafkaTransactionState(
+		@VisibleForTesting
+		@Internal
+		public KafkaTransactionState(
 				@Nullable String transactionalId,
 				long producerId,
 				short epoch,
@@ -1165,7 +1171,9 @@ public class FlinkKafkaProducer011<IN>
 	public static class KafkaTransactionContext {
 		final Set<String> transactionalIds;
 
-		KafkaTransactionContext(Set<String> transactionalIds) {
+		@VisibleForTesting
+		@Internal
+		public KafkaTransactionContext(Set<String> transactionalIds) {
 			checkNotNull(transactionalIds);
 			this.transactionalIds = transactionalIds;
 		}

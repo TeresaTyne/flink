@@ -715,7 +715,7 @@ variable. This can be expressed with two corresponding functions:
   <tbody>
   <tr>
     <td>
-      {% highlight text %}
+{% highlight text %}
 LAST(variable.field, n)
 {% endhighlight %}
     </td>
@@ -726,7 +726,7 @@ LAST(variable.field, n)
   </tr>
   <tr>
     <td>
-      {% highlight text %}
+{% highlight text %}
 FIRST(variable.field, n)
 {% endhighlight %}
     </td>
@@ -1038,7 +1038,7 @@ use [time attributes](time_attributes.html). To select those there are available
       <td><p>Returns the timestamp of the last row that was mapped to the given pattern.</p>
       <p>The resulting attribute is a <a href="time_attributes.html">rowtime attribute</a>
          that can be used in subsequent time-based operations such as
-         <a href="#joins">time-windowed joins</a> and <a href="#aggregations">group window or over
+         <a href="#joins">interval joins</a> and <a href="#aggregations">group window or over
          window aggregations</a>.</p></td>
     </tr>
     <tr>
@@ -1047,7 +1047,7 @@ use [time attributes](time_attributes.html). To select those there are available
       </td>
       <td><p>Returns a <a href="time_attributes.html#processing-time">proctime attribute</a>
           that can be used in subsequent time-based operations such as
-          <a href="#joins">time-windowed joins</a> and <a href="#aggregations">group window or over
+          <a href="#joins">interval joins</a> and <a href="#aggregations">group window or over
           window aggregations</a>.</p></td>
     </tr>
   </tbody>

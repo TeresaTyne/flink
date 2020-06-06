@@ -23,6 +23,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.core.execution.PipelineExecutor;
 import org.apache.flink.core.execution.PipelineExecutorFactory;
+import org.apache.flink.yarn.configuration.YarnDeploymentTarget;
 
 import javax.annotation.Nonnull;
 
@@ -33,12 +34,21 @@ import javax.annotation.Nonnull;
 public class YarnSessionClusterExecutorFactory implements PipelineExecutorFactory {
 
 	@Override
+	public String getName() {
+		return YarnSessionClusterExecutor.NAME;
+	}
+
+	@Override
 	public boolean isCompatibleWith(@Nonnull final Configuration configuration) {
 		return YarnSessionClusterExecutor.NAME.equalsIgnoreCase(configuration.get(DeploymentOptions.TARGET));
 	}
 
 	@Override
 	public PipelineExecutor getExecutor(@Nonnull final Configuration configuration) {
-		return new YarnSessionClusterExecutor();
+		try {
+			return new YarnSessionClusterExecutor();
+		} catch (NoClassDefFoundError e) {
+			throw new IllegalStateException(YarnDeploymentTarget.ERROR_MESSAGE);
+		}
 	}
 }

@@ -78,6 +78,12 @@ public class ResourceProfile implements Serializable {
 	/** A ResourceProfile describing zero resources. */
 	public static final ResourceProfile ZERO = newBuilder().build();
 
+	/** Maximum number of cpu cores to output in {@link #toString()}. */
+	static final BigDecimal MAX_CPU_CORE_NUMBER_TO_LOG = new BigDecimal(16384);
+
+	/** Maximum memory resource size to output in {@link #toString()}. */
+	static final MemorySize MAX_MEMORY_SIZE_TO_LOG = new MemorySize(1L << 50); // 1Pb
+
 	// ------------------------------------------------------------------------
 
 	/** How many cpu cores are needed. Can be null only if it is unknown. */
@@ -378,6 +384,32 @@ public class ResourceProfile implements Serializable {
 		);
 	}
 
+	@Nonnull
+	public ResourceProfile multiply(final int multiplier) {
+		checkArgument(multiplier >= 0, "multiplier must be >= 0");
+		if (equals(ANY)) {
+			return ANY;
+		}
+
+		if (this.equals(UNKNOWN)) {
+			return UNKNOWN;
+		}
+
+		Map<String, Resource> resultExtendedResource = new HashMap<>(extendedResources.size());
+		for (Map.Entry<String, Resource> entry : extendedResources.entrySet()) {
+			resultExtendedResource.put(entry.getKey(), entry.getValue().multiply(multiplier));
+		}
+
+		return new ResourceProfile(
+			cpuCores.multiply(multiplier),
+			taskHeapMemory.multiply(multiplier),
+			taskOffHeapMemory.multiply(multiplier),
+			managedMemory.multiply(multiplier),
+			networkMemory.multiply(multiplier),
+			resultExtendedResource
+		);
+	}
+
 	@Override
 	public String toString() {
 		if (this.equals(UNKNOWN)) {
@@ -388,17 +420,28 @@ public class ResourceProfile implements Serializable {
 			return "ResourceProfile{ANY}";
 		}
 
-		final StringBuilder resources = new StringBuilder(extendedResources.size() * 10);
+		final StringBuilder extendedResourceStr = new StringBuilder(extendedResources.size() * 10);
 		for (Map.Entry<String, Resource> resource : extendedResources.entrySet()) {
-			resources.append(", ").append(resource.getKey()).append('=').append(resource.getValue().getValue());
+			extendedResourceStr.append(", ").append(resource.getKey()).append('=').append(resource.getValue().getValue());
 		}
-		return "ResourceProfile{" +
-			"cpuCores=" + cpuCores.getValue() +
-			", taskHeapMemory=" + taskHeapMemory +
-			", taskOffHeapMemory=" + taskOffHeapMemory +
-			", managedMemory=" + managedMemory +
-			", networkMemory=" + networkMemory + resources +
-			'}';
+		return "ResourceProfile{" + getResourceString() + extendedResourceStr + '}';
+	}
+
+	private String getResourceString() {
+		String resourceStr = cpuCores == null || cpuCores.getValue().compareTo(MAX_CPU_CORE_NUMBER_TO_LOG) > 0 ?
+			"" : "cpuCores=" + cpuCores.getValue();
+		resourceStr = addMemorySizeString(resourceStr, "taskHeapMemory", taskHeapMemory);
+		resourceStr = addMemorySizeString(resourceStr, "taskOffHeapMemory", taskOffHeapMemory);
+		resourceStr = addMemorySizeString(resourceStr, "managedMemory", managedMemory);
+		resourceStr = addMemorySizeString(resourceStr, "networkMemory", networkMemory);
+		return resourceStr;
+	}
+
+	private static String addMemorySizeString(String resourceStr, String name, MemorySize size) {
+		String comma = resourceStr.isEmpty() ? "" : ", ";
+		String memorySizeStr = size == null || size.compareTo(MAX_MEMORY_SIZE_TO_LOG) > 0 ?
+			"" : comma + name + '=' + size.toHumanReadableString();
+		return resourceStr + memorySizeStr;
 	}
 
 	// ------------------------------------------------------------------------
@@ -486,7 +529,7 @@ public class ResourceProfile implements Serializable {
 		}
 
 		public Builder setTaskHeapMemoryMB(int taskHeapMemoryMB) {
-			this.taskHeapMemory = MemorySize.parse(taskHeapMemoryMB + "m");
+			this.taskHeapMemory = MemorySize.ofMebiBytes(taskHeapMemoryMB);
 			return this;
 		}
 
@@ -496,7 +539,7 @@ public class ResourceProfile implements Serializable {
 		}
 
 		public Builder setTaskOffHeapMemoryMB(int taskOffHeapMemoryMB) {
-			this.taskOffHeapMemory = MemorySize.parse(taskOffHeapMemoryMB + "m");
+			this.taskOffHeapMemory = MemorySize.ofMebiBytes(taskOffHeapMemoryMB);
 			return this;
 		}
 
@@ -506,7 +549,7 @@ public class ResourceProfile implements Serializable {
 		}
 
 		public Builder setManagedMemoryMB(int managedMemoryMB) {
-			this.managedMemory = MemorySize.parse(managedMemoryMB + "m");
+			this.managedMemory = MemorySize.ofMebiBytes(managedMemoryMB);
 			return this;
 		}
 
@@ -516,7 +559,7 @@ public class ResourceProfile implements Serializable {
 		}
 
 		public Builder setNetworkMemoryMB(int networkMemoryMB) {
-			this.networkMemory = MemorySize.parse(networkMemoryMB + "m");
+			this.networkMemory = MemorySize.ofMebiBytes(networkMemoryMB);
 			return this;
 		}
 

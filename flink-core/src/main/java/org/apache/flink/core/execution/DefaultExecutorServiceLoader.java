@@ -29,6 +29,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ServiceLoader;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -79,7 +81,17 @@ public class DefaultExecutorServiceLoader implements PipelineExecutorServiceLoad
 			throw new IllegalStateException("Multiple compatible client factories found for:\n" + configStr + ".");
 		}
 
-		return compatibleFactories.isEmpty() ? null : compatibleFactories.get(0);
+		if (compatibleFactories.isEmpty()) {
+			throw new IllegalStateException("No ExecutorFactory found to execute the application.");
+		}
+
+		return compatibleFactories.get(0);
+	}
+
+	@Override
+	public Stream<String> getExecutorNames() {
+		return StreamSupport.stream(defaultLoader.spliterator(), false)
+				.map(PipelineExecutorFactory::getName);
 	}
 
 	private DefaultExecutorServiceLoader() {

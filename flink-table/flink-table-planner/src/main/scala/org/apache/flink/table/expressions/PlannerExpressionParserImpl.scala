@@ -23,7 +23,7 @@ import _root_.java.util.{List => JList}
 import org.apache.flink.api.common.typeinfo.{SqlTimeTypeInfo, TypeInformation}
 import org.apache.flink.table.api._
 import org.apache.flink.table.delegation.PlannerExpressionParser
-import org.apache.flink.table.expressions.utils.ApiExpressionUtils._
+import ApiExpressionUtils._
 import org.apache.flink.table.functions.BuiltInFunctionDefinitions
 import org.apache.flink.table.types.utils.TypeConversions.fromLegacyInfoToDataType
 
@@ -52,8 +52,8 @@ class PlannerExpressionParserImpl extends PlannerExpressionParser {
  * Parser for expressions inside a String. This parses exactly the same expressions that
  * would be accepted by the Scala Expression DSL.
  *
- * See [[org.apache.flink.table.api.scala.ImplicitExpressionConversions]] and
- * [[org.apache.flink.table.api.scala.ImplicitExpressionOperations]] for the constructs
+ * See [[org.apache.flink.table.api.bridge.scala.ImplicitExpressionConversions]] and
+ * [[org.apache.flink.table.api.bridge.scala.ImplicitExpressionOperations]] for the constructs
  * available in the Scala Expression DSL. This parser must be kept in sync with the Scala DSL
  * lazy valined in the above files.
  */
@@ -235,7 +235,7 @@ object PlannerExpressionParserImpl extends JavaTokenParsers
   }
 
   lazy val nullLiteral: PackratParser[Expression] = (NULL | NULL_OF) ~ "(" ~> dataType <~ ")" ^^ {
-    dt => valueLiteral(null, fromLegacyInfoToDataType(dt))
+    dt => valueLiteral(null, fromLegacyInfoToDataType(dt).nullable())
   }
 
   lazy val literalExpr: PackratParser[Expression] =

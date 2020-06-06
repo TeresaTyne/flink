@@ -21,13 +21,10 @@ package org.apache.flink.table.types.extraction;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.catalog.DataTypeLookup;
+import org.apache.flink.table.catalog.DataTypeFactory;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.FieldsDataType;
-import org.apache.flink.table.types.extraction.utils.DataTypeTemplate;
-import org.apache.flink.table.types.extraction.utils.ExtractionUtils;
 import org.apache.flink.table.types.logical.LogicalType;
-import org.apache.flink.table.types.logical.RawType;
 import org.apache.flink.table.types.logical.StructuredType;
 import org.apache.flink.table.types.logical.StructuredType.StructuredAttribute;
 import org.apache.flink.table.types.utils.ClassDataTypeConverter;
@@ -51,16 +48,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.collectStructuredFields;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.collectTypeHierarchy;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.createRawType;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.extractAssigningConstructor;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.extractionError;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.isStructuredFieldMutable;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.resolveVariable;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.toClass;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.validateStructuredClass;
-import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.validateStructuredFieldReadability;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.collectStructuredFields;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.collectTypeHierarchy;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.createRawType;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.extractAssigningConstructor;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.extractionError;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.hasInvokableConstructor;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.isStructuredFieldMutable;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.resolveVariable;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.toClass;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.validateStructuredClass;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.validateStructuredFieldReadability;
+import static org.apache.flink.table.types.extraction.ExtractionUtils.validateStructuredSelfReference;
 
 /**
  * Reflection-based utility that analyzes a given {@link java.lang.reflect.Type}, method, or class to
@@ -69,12 +68,12 @@ import static org.apache.flink.table.types.extraction.utils.ExtractionUtils.vali
 @Internal
 public final class DataTypeExtractor {
 
-	private final DataTypeLookup lookup;
+	private final DataTypeFactory typeFactory;
 
 	private final String contextExplanation;
 
-	private DataTypeExtractor(DataTypeLookup lookup, String contextExplanation) {
-		this.lookup = lookup;
+	private DataTypeExtractor(DataTypeFactory typeFactory, String contextExplanation) {
+		this.typeFactory = typeFactory;
 		this.contextExplanation = contextExplanation;
 	}
 
@@ -82,10 +81,10 @@ public final class DataTypeExtractor {
 	 * Extracts a data type from a type without considering surrounding classes or templates.
 	 */
 	public static DataType extractFromType(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			Type type) {
 		return extractDataTypeWithClassContext(
-			lookup,
+			typeFactory,
 			DataTypeTemplate.fromDefaults(),
 			null,
 			type,
@@ -96,11 +95,11 @@ public final class DataTypeExtractor {
 	 * Extracts a data type from a type without considering surrounding classes but templates.
 	 */
 	public static DataType extractFromType(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			DataTypeTemplate template,
 			Type type) {
 		return extractDataTypeWithClassContext(
-			lookup,
+			typeFactory,
 			template,
 			null,
 			type,
@@ -112,13 +111,13 @@ public final class DataTypeExtractor {
 	 * the information of the most specific type {@code contextType}.
 	 */
 	public static DataType extractFromGeneric(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			Class<?> baseClass,
 			int genericPos,
 			Type contextType) {
 		final TypeVariable<?> variable = baseClass.getTypeParameters()[genericPos];
 		return extractDataTypeWithClassContext(
-			lookup,
+			typeFactory,
 			DataTypeTemplate.fromDefaults(),
 			contextType,
 			variable,
@@ -133,7 +132,7 @@ public final class DataTypeExtractor {
 	 * annotation.
 	 */
 	public static DataType extractFromMethodParameter(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			Class<?> baseClass,
 			Method method,
 			int paramPos) {
@@ -141,12 +140,12 @@ public final class DataTypeExtractor {
 		final DataTypeHint hint = parameter.getAnnotation(DataTypeHint.class);
 		final DataTypeTemplate template;
 		if (hint != null) {
-			template = DataTypeTemplate.fromAnnotation(lookup, hint);
+			template = DataTypeTemplate.fromAnnotation(typeFactory, hint);
 		} else {
 			template = DataTypeTemplate.fromDefaults();
 		}
 		return extractDataTypeWithClassContext(
-			lookup,
+			typeFactory,
 			template,
 			baseClass,
 			parameter.getParameterizedType(),
@@ -162,18 +161,18 @@ public final class DataTypeExtractor {
 	 * annotation.
 	 */
 	public static DataType extractFromMethodOutput(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			Class<?> baseClass,
 			Method method) {
 		final DataTypeHint hint = method.getAnnotation(DataTypeHint.class);
 		final DataTypeTemplate template;
 		if (hint != null) {
-			template = DataTypeTemplate.fromAnnotation(lookup, hint);
+			template = DataTypeTemplate.fromAnnotation(typeFactory, hint);
 		} else {
 			template = DataTypeTemplate.fromDefaults();
 		}
 		return extractDataTypeWithClassContext(
-			lookup,
+			typeFactory,
 			template,
 			baseClass,
 			method.getGenericReturnType(),
@@ -184,12 +183,12 @@ public final class DataTypeExtractor {
 	}
 
 	private static DataType extractDataTypeWithClassContext(
-			DataTypeLookup lookup,
+			DataTypeFactory typeFactory,
 			DataTypeTemplate outerTemplate,
 			@Nullable Type contextType,
 			Type type,
 			String contextExplanation) {
-		final DataTypeExtractor extractor = new DataTypeExtractor(lookup, contextExplanation);
+		final DataTypeExtractor extractor = new DataTypeExtractor(typeFactory, contextExplanation);
 		final List<Type> typeHierarchy;
 		if (contextType != null) {
 			typeHierarchy = collectTypeHierarchy(contextType);
@@ -208,7 +207,7 @@ public final class DataTypeExtractor {
 		// best effort resolution of type variables, the resolved type can still be a variable
 		final Type resolvedType;
 		if (type instanceof TypeVariable) {
-			resolvedType = resolveVariable(typeHierarchy, (TypeVariable) type);
+			resolvedType = resolveVariable(typeHierarchy, (TypeVariable<?>) type);
 		} else {
 			resolvedType = type;
 		}
@@ -218,7 +217,7 @@ public final class DataTypeExtractor {
 		if (clazz != null) {
 			final DataTypeHint hint = clazz.getAnnotation(DataTypeHint.class);
 			if (hint != null) {
-				template = outerTemplate.mergeWithInnerAnnotation(lookup, hint);
+				template = outerTemplate.mergeWithInnerAnnotation(typeFactory, hint);
 			}
 		}
 		// main work
@@ -241,7 +240,7 @@ public final class DataTypeExtractor {
 			// ignore the exception and just treat it as RAW type
 			final Class<?> clazz = toClass(type);
 			if (template.isAllowRawGlobally() || template.isAllowAnyPattern(clazz)) {
-				return createRawType(lookup, template.rawSerializer, clazz);
+				return createRawType(typeFactory, template.rawSerializer, clazz);
 			}
 			// forward the root cause otherwise
 			throw extractionError(
@@ -305,8 +304,12 @@ public final class DataTypeExtractor {
 			DataTypeTemplate template,
 			List<Type> typeHierarchy,
 			Type type) {
+		// prefer BYTES over ARRAY<TINYINT> for byte[]
+		if (type == byte[].class) {
+			return DataTypes.BYTES();
+		}
 		// for T[]
-		if (type instanceof GenericArrayType) {
+		else if (type instanceof GenericArrayType) {
 			final GenericArrayType genericArray = (GenericArrayType) type;
 			return DataTypes.ARRAY(
 				extractDataTypeOrRaw(template, typeHierarchy, genericArray.getGenericComponentType()));
@@ -325,7 +328,7 @@ public final class DataTypeExtractor {
 	private @Nullable DataType extractEnforcedRawType(DataTypeTemplate template, Type type) {
 		final Class<?> clazz = toClass(type);
 		if (template.isForceAnyPattern(clazz)) {
-			return createRawType(lookup, template.rawSerializer, clazz);
+			return createRawType(typeFactory, template.rawSerializer, clazz);
 		}
 		return null;
 	}
@@ -451,6 +454,7 @@ public final class DataTypeExtractor {
 		}
 
 		validateStructuredClass(clazz);
+		validateStructuredSelfReference(type, typeHierarchy);
 
 		final List<Field> fields = collectStructuredFields(clazz);
 
@@ -474,6 +478,12 @@ public final class DataTypeExtractor {
 				clazz.getName(),
 				fields.stream().map(Field::getName).collect(Collectors.joining(", ")));
 		}
+		// check for a default constructor otherwise
+		else if (constructor == null && !hasInvokableConstructor(clazz)) {
+			throw extractionError(
+				"Class '%s' has neither a constructor that assigns all fields nor a default constructor.",
+				clazz.getName());
+		}
 
 		final Map<String, DataType> fieldDataTypes = extractStructuredTypeFields(
 			template,
@@ -481,11 +491,20 @@ public final class DataTypeExtractor {
 			type,
 			fields);
 
+		final List<StructuredAttribute> attributes = createStructuredTypeAttributes(
+			constructor,
+			fieldDataTypes);
+
 		final StructuredType.Builder builder = StructuredType.newBuilder(clazz);
-		builder.attributes(createStructuredTypeAttributes(constructor, fieldDataTypes));
+		builder.attributes(attributes);
 		builder.setFinal(true); // anonymous structured types should not allow inheritance
 		builder.setInstantiable(true);
-		return new FieldsDataType(builder.build(), clazz, fieldDataTypes);
+		return new FieldsDataType(
+			builder.build(),
+			clazz,
+			attributes.stream()
+				.map(a -> fieldDataTypes.get(a.getName()))
+				.collect(Collectors.toList()));
 	}
 
 	private Map<String, DataType> extractStructuredTypeFields(
@@ -503,7 +522,7 @@ public final class DataTypeExtractor {
 				fieldTypeHierarchy.addAll(typeHierarchy);
 				// hierarchy of structured type
 				fieldTypeHierarchy.addAll(structuredTypeHierarchy);
-				final DataTypeTemplate fieldTemplate = mergeFieldTemplate(lookup, field, template);
+				final DataTypeTemplate fieldTemplate = mergeFieldTemplate(typeFactory, field, template);
 				final DataType fieldDataType = extractDataTypeOrRaw(fieldTemplate, fieldTypeHierarchy, fieldType);
 				fieldDataTypes.put(field.getName(), fieldDataType);
 			} catch (Throwable t) {
@@ -539,19 +558,21 @@ public final class DataTypeExtractor {
 	/**
 	 * Merges the template of a structured type with a possibly more specific field annotation.
 	 */
-	private DataTypeTemplate mergeFieldTemplate(DataTypeLookup lookup, Field field, DataTypeTemplate structuredTemplate) {
+	private DataTypeTemplate mergeFieldTemplate(
+			DataTypeFactory typeFactory,
+			Field field,
+			DataTypeTemplate structuredTemplate) {
 		final DataTypeHint hint = field.getAnnotation(DataTypeHint.class);
 		if (hint == null) {
 			return structuredTemplate.copyWithoutDataType();
 		}
-		return structuredTemplate.mergeWithInnerAnnotation(lookup, hint);
+		return structuredTemplate.mergeWithInnerAnnotation(typeFactory, hint);
 	}
 
 	/**
 	 * Use closest class for data type if possible. Even though a hint might have provided some data
 	 * type, in many cases, the conversion class can be enriched with the extraction type itself.
 	 */
-	@SuppressWarnings("unchecked")
 	private DataType closestBridging(DataType dataType, @Nullable Class<?> clazz) {
 		// no context class or conversion class is already more specific than context class
 		if (clazz == null || clazz.isAssignableFrom(dataType.getConversionClass())) {
@@ -560,9 +581,7 @@ public final class DataTypeExtractor {
 		final LogicalType logicalType = dataType.getLogicalType();
 		final boolean supportsConversion = logicalType.supportsInputConversion(clazz) ||
 			logicalType.supportsOutputConversion(clazz);
-		if (supportsConversion && logicalType instanceof RawType) {
-			return DataTypes.RAW(clazz, ((RawType) logicalType).getTypeSerializer());
-		} else if (supportsConversion) {
+		if (supportsConversion) {
 			return dataType.bridgedTo(clazz);
 		}
 		return dataType;

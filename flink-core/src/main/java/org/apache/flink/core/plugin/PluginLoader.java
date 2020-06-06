@@ -20,7 +20,7 @@ package org.apache.flink.core.plugin;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.util.ArrayUtils;
-import org.apache.flink.util.ChildFirstClassLoader;
+import org.apache.flink.util.TemporaryClassLoaderContext;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -34,7 +34,7 @@ import java.util.ServiceLoader;
 
 /**
  * A {@link PluginLoader} is used by the {@link PluginManager} to load a single plugin. It is essentially a combination
- * of a {@link ChildFirstClassLoader} and {@link ServiceLoader}. This class can locate and load service implementations
+ * of a {@link PluginClassLoader} and {@link ServiceLoader}. This class can locate and load service implementations
  * from the plugin for a given SPI. The {@link PluginDescriptor}, which among other information contains the resource
  * URLs, is provided at construction.
  */
@@ -68,8 +68,8 @@ public class PluginLoader {
 	 * @param <P> Type of the requested plugin service.
 	 * @return An iterator of all implementations of the given service interface that could be loaded from the plugin.
 	 */
-	public <P extends Plugin> Iterator<P> load(Class<P> service) {
-		try (TemporaryClassLoaderContext classLoaderContext = new TemporaryClassLoaderContext(pluginClassLoader)) {
+	public <P> Iterator<P> load(Class<P> service) {
+		try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(pluginClassLoader)) {
 			return new ContextClassLoaderSettingIterator<>(
 				ServiceLoader.load(service, pluginClassLoader).iterator(),
 				pluginClassLoader);
@@ -82,7 +82,7 @@ public class PluginLoader {
 	 *
 	 * @param <P> type of the iterated plugin element.
 	 */
-	static class ContextClassLoaderSettingIterator<P extends Plugin> implements Iterator<P> {
+	static class ContextClassLoaderSettingIterator<P> implements Iterator<P> {
 
 		private final Iterator<P> delegate;
 		private final ClassLoader pluginClassLoader;
@@ -99,7 +99,7 @@ public class PluginLoader {
 
 		@Override
 		public P next() {
-			try (TemporaryClassLoaderContext classLoaderContext = new TemporaryClassLoaderContext(pluginClassLoader)) {
+			try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(pluginClassLoader)) {
 				return delegate.next();
 			}
 		}
@@ -112,6 +112,8 @@ public class PluginLoader {
 	 * starting with a whitelist prefix.
 	 */
 	private static final class PluginClassLoader extends URLClassLoader {
+		private static final ClassLoader PLATFORM_OR_BOOTSTRAP_LOADER;
+
 		private final ClassLoader flinkClassLoader;
 
 		private final String[] allowedFlinkPackages;
@@ -119,7 +121,7 @@ public class PluginLoader {
 		private final String[] allowedResourcePrefixes;
 
 		PluginClassLoader(URL[] pluginResourceURLs, ClassLoader flinkClassLoader, String[] allowedFlinkPackages) {
-			super(pluginResourceURLs, null);
+			super(pluginResourceURLs, PLATFORM_OR_BOOTSTRAP_LOADER);
 			this.flinkClassLoader = flinkClassLoader;
 			this.allowedFlinkPackages = allowedFlinkPackages;
 			allowedResourcePrefixes = Arrays.stream(allowedFlinkPackages)
@@ -181,6 +183,21 @@ public class PluginLoader {
 
 		private boolean isAllowedFlinkResource(final String name) {
 			return Arrays.stream(allowedResourcePrefixes).anyMatch(name::startsWith);
+		}
+
+		static {
+			ClassLoader platformLoader = null;
+			try {
+				platformLoader = (ClassLoader) ClassLoader.class
+					.getMethod("getPlatformClassLoader")
+					.invoke(null);
+			} catch (NoSuchMethodException e) {
+				// on Java 8 this method does not exist, but using null indicates the bootstrap loader that we want
+				// to have
+			} catch (Exception e) {
+				throw new IllegalStateException("Cannot retrieve platform classloader on Java 9+", e);
+			}
+			PLATFORM_OR_BOOTSTRAP_LOADER = platformLoader;
 		}
 	}
 }

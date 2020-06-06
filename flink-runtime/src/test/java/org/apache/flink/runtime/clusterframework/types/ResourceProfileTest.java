@@ -23,23 +23,32 @@ import org.apache.flink.api.common.resources.CPUResource;
 import org.apache.flink.api.common.resources.GPUResource;
 import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.core.testutils.CommonTestUtils;
+import org.apache.flink.util.TestLogger;
 
+import org.hamcrest.Matcher;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.flink.runtime.clusterframework.types.ResourceProfile.MAX_CPU_CORE_NUMBER_TO_LOG;
+import static org.apache.flink.runtime.clusterframework.types.ResourceProfile.MAX_MEMORY_SIZE_TO_LOG;
+import static org.hamcrest.CoreMatchers.allOf;
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
  * Tests for the {@link ResourceProfile}.
  */
-public class ResourceProfileTest {
+public class ResourceProfileTest extends TestLogger {
+	private static final MemorySize TOO_LARGE_MEMORY = MAX_MEMORY_SIZE_TO_LOG.add(MemorySize.ofMebiBytes(10));
 
 	@Test
 	public void testMatchRequirement() {
@@ -125,7 +134,7 @@ public class ResourceProfileTest {
 		ResourceSpec rs5 = ResourceSpec.newBuilder(1.0, 100).
 				setGPUResource(2.2).
 				build();
-		MemorySize networkMemory = MemorySize.parse(100 + "m");
+		MemorySize networkMemory = MemorySize.ofMebiBytes(100);
 		assertEquals(ResourceProfile.fromResourceSpec(rs3, networkMemory), ResourceProfile.fromResourceSpec(rs5, networkMemory));
 
 		final ResourceProfile rp1 = ResourceProfile.newBuilder()
@@ -199,7 +208,7 @@ public class ResourceProfileTest {
 		ResourceSpec rs = ResourceSpec.newBuilder(1.0, 100).
 				setGPUResource(1.6).
 				build();
-		ResourceProfile rp = ResourceProfile.fromResourceSpec(rs, MemorySize.parse(50 + "m"));
+		ResourceProfile rp = ResourceProfile.fromResourceSpec(rs, MemorySize.ofMebiBytes(50));
 
 		assertEquals(new CPUResource(1.0), rp.getCpuCores());
 		assertEquals(150, rp.getTotalMemory().getMebiBytes());
@@ -367,6 +376,39 @@ public class ResourceProfileTest {
 	}
 
 	@Test
+	public void testMultiply() {
+		final int by = 3;
+		final ResourceProfile rp1 = ResourceProfile.newBuilder()
+			.setCpuCores(1.0)
+			.setTaskHeapMemoryMB(100)
+			.setTaskOffHeapMemoryMB(100)
+			.setNetworkMemoryMB(100)
+			.setManagedMemoryMB(100)
+			.addExtendedResource("gpu", new GPUResource(1.0))
+			.build();
+
+		ResourceProfile rp2 = rp1;
+		for (int i = 1; i < by; ++i) {
+			rp2 = rp2.merge(rp1);
+		}
+
+		assertEquals(rp2, rp1.multiply(by));
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void testMultiplyNegative() {
+		final ResourceProfile rp = ResourceProfile.newBuilder()
+			.setCpuCores(1.0)
+			.setTaskHeapMemoryMB(100)
+			.setTaskOffHeapMemoryMB(100)
+			.setNetworkMemoryMB(100)
+			.setManagedMemoryMB(100)
+			.addExtendedResource("gpu", new GPUResource(1.0))
+			.build();
+		rp.multiply(-2);
+	}
+
+	@Test
 	public void testFromSpecWithSerializationCopy() throws Exception {
 		final ResourceSpec copiedSpec = CommonTestUtils.createCopySerializable(ResourceSpec.UNKNOWN);
 		final ResourceProfile profile = ResourceProfile.fromResourceSpec(copiedSpec);
@@ -386,5 +428,42 @@ public class ResourceProfileTest {
 		final ResourceProfile copiedProfile = CommonTestUtils.createCopySerializable(ResourceProfile.ANY);
 
 		assertSame(ResourceProfile.ANY, copiedProfile);
+	}
+
+	@Test
+	public void doesNotIncludeCPUAndMemoryInToStringIfTheyAreTooLarge() {
+		double tooLargeCpuCount = MAX_CPU_CORE_NUMBER_TO_LOG.doubleValue() + 1.0;
+		ResourceProfile resourceProfile = createResourceProfile(tooLargeCpuCount, TOO_LARGE_MEMORY);
+		assertThat(
+			resourceProfile.toString(),
+			allOf(
+				not(containsCPUCores()),
+				not(containsTaskHeapMemory())));
+	}
+
+	@Test
+	public void includesCPUAndMemoryInToStringIfTheyAreBelowThreshold() {
+		ResourceProfile resourceProfile = createResourceProfile(1.0, MemorySize.ofMebiBytes(4));
+		assertThat(
+			resourceProfile.toString(),
+			allOf(
+				containsCPUCores(),
+				containsTaskHeapMemory()));
+	}
+
+	private Matcher<String> containsTaskHeapMemory() {
+		return containsString("taskHeapMemory=");
+	}
+
+	private Matcher<String> containsCPUCores() {
+		return containsString("cpuCores=");
+	}
+
+	private static ResourceProfile createResourceProfile(double cpu, MemorySize taskHeapMemory) {
+		return ResourceProfile
+			.newBuilder()
+			.setCpuCores(cpu)
+			.setTaskHeapMemory(taskHeapMemory)
+			.build();
 	}
 }

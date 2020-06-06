@@ -41,6 +41,7 @@ import org.apache.flink.runtime.checkpoint.CheckpointStatsSnapshot;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsTracker;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
 import org.apache.flink.runtime.checkpoint.MasterTriggerRestoreHook;
+import org.apache.flink.runtime.checkpoint.OperatorCoordinatorCheckpointContext;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
 import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.concurrent.FutureUtils.ConjunctFuture;
@@ -48,7 +49,6 @@ import org.apache.flink.runtime.concurrent.ScheduledExecutorServiceAdapter;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.execution.SuppressRestartsException;
 import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
-import org.apache.flink.runtime.executiongraph.failover.flip1.FailoverTopology;
 import org.apache.flink.runtime.executiongraph.failover.flip1.ResultPartitionAvailabilityChecker;
 import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionReleaseStrategy;
 import org.apache.flink.runtime.executiongraph.restart.ExecutionGraphRestartCallback;
@@ -408,11 +408,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		return this.verticesInCreationOrder.size();
 	}
 
-	public SchedulingTopology<?, ?> getSchedulingTopology() {
-		return executionTopology;
-	}
-
-	public FailoverTopology<?, ?> getFailoverTopology() {
+	public SchedulingTopology getSchedulingTopology() {
 		return executionTopology;
 	}
 
@@ -457,6 +453,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		ExecutionVertex[] tasksToWaitFor = collectExecutionVertices(verticesToWaitFor);
 		ExecutionVertex[] tasksToCommitTo = collectExecutionVertices(verticesToCommitTo);
 
+		final Collection<OperatorCoordinatorCheckpointContext> operatorCoordinators = buildOpCoordinatorCheckpointContexts();
+
 		checkpointStatsTracker = checkNotNull(statsTracker, "CheckpointStatsTracker");
 
 		CheckpointFailureManager failureManager = new CheckpointFailureManager(
@@ -487,6 +485,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			tasksToTrigger,
 			tasksToWaitFor,
 			tasksToCommitTo,
+			operatorCoordinators,
 			checkpointIDCounter,
 			checkpointStore,
 			checkpointStateBackend,
@@ -564,6 +563,15 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			}
 			return all.toArray(new ExecutionVertex[all.size()]);
 		}
+	}
+
+	private Collection<OperatorCoordinatorCheckpointContext> buildOpCoordinatorCheckpointContexts() {
+		final ArrayList<OperatorCoordinatorCheckpointContext> contexts = new ArrayList<>();
+		for (final ExecutionJobVertex vertex : verticesInCreationOrder) {
+			contexts.addAll(vertex.getOperatorCoordinators());
+		}
+		contexts.trimToSize();
+		return contexts;
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -897,7 +905,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 		while (true) {
 			JobStatus current = state;
 
-			if (current == JobStatus.RUNNING || current == JobStatus.CREATED) {
+			if (current == JobStatus.RUNNING || current == JobStatus.CREATED || current == JobStatus.RESTARTING) {
 				if (transitionState(current, JobStatus.CANCELLING)) {
 
 					// make sure no concurrent local actions interfere with the cancellation
@@ -934,16 +942,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
 			// all vertices to be in their final state.
 			else if (current == JobStatus.FAILING) {
 				if (transitionState(current, JobStatus.CANCELLING)) {
-					return;
-				}
-			}
-			// All vertices have been cancelled and it's safe to directly go
-			// into the canceled state.
-			else if (current == JobStatus.RESTARTING) {
-				if (transitionState(current, JobStatus.CANCELED)) {
-					onTerminalState(JobStatus.CANCELED);
-
-					LOG.info("Canceled during restart.");
 					return;
 				}
 			}
@@ -1219,7 +1217,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
 	//  State Transitions
 	// ------------------------------------------------------------------------
 
-	private boolean transitionState(JobStatus current, JobStatus newState) {
+	public boolean transitionState(JobStatus current, JobStatus newState) {
 		return transitionState(current, newState, null);
 	}
 
@@ -1535,9 +1533,9 @@ public class ExecutionGraph implements AccessExecutionGraph {
 	}
 
 	ResultPartitionID createResultPartitionId(final IntermediateResultPartitionID resultPartitionId) {
-		final SchedulingResultPartition<?, ?> schedulingResultPartition =
-			getSchedulingTopology().getResultPartitionOrThrow(resultPartitionId);
-		final SchedulingExecutionVertex<?, ?> producer = schedulingResultPartition.getProducer();
+		final SchedulingResultPartition schedulingResultPartition =
+			getSchedulingTopology().getResultPartition(resultPartitionId);
+		final SchedulingExecutionVertex producer = schedulingResultPartition.getProducer();
 		final ExecutionVertexID producerId = producer.getId();
 		final JobVertexID jobVertexId = producerId.getJobVertexId();
 		final ExecutionJobVertex jobVertex = getJobVertex(jobVertexId);

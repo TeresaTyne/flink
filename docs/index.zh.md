@@ -38,15 +38,15 @@ Apache Flink 是一个分布式流批一体化的开源平台。Flink 的核心�
   * [运行与管理 Flink 流处理应用](./getting-started/docker-playgrounds/flink-operations-playground.html)
 
 * **概念**: 学习 Flink 的基本概念能更好地理解文档。
-  * [数据流编程模型](concepts/programming-model.html)
-  * [分布式执行](concepts/runtime.html)
+  * [有状态流处理](concepts/stateful-stream-processing.html)
+  * [实时流处理](concepts/timely-stream-processing.html)
+  * [Flink 架构](concepts/flink-architecture.html)
   * [术语表](concepts/glossary.html)
 
 ## API 参考
 
 API 参考列举并解释了 Flink API 的所有功能。
 
-* [基本 API 概念](dev/api_concepts.html)
 * [DataStream API](dev/datastream_api.html)
 * [DataSet API](dev/batch/index.html)
 * [Table API &amp; SQL](dev/table/index.html)
@@ -59,6 +59,7 @@ API 参考列举并解释了 Flink API 的所有功能。
 
 发布日志包含了 Flink 版本之间的重大更新。请在你升级 Flink 之前仔细阅读相应的发布日志。
 
+* [Flink 1.10 的发布日志](release-notes/flink-1.10.html).
 * [Flink 1.9 的发布日志](release-notes/flink-1.9.html)。
 * [Flink 1.8 的发布日志](release-notes/flink-1.8.html)。
 * [Flink 1.7 的发布日志](release-notes/flink-1.7.html)。
