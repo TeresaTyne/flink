@@ -110,11 +110,30 @@ public class CoreOptions {
 			" resolved through the parent ClassLoader first. A pattern is a simple prefix that is checked against" +
 			" the fully qualified class name. These patterns are appended to \"" + ALWAYS_PARENT_FIRST_LOADER_PATTERNS.key() + "\".");
 
+	@Documentation.Section(Documentation.Sections.EXPERT_CLASS_LOADING)
+	public static final ConfigOption<Boolean> FAIL_ON_USER_CLASS_LOADING_METASPACE_OOM = ConfigOptions
+		.key("classloader.fail-on-metaspace-oom-error")
+		.booleanType()
+		.defaultValue(true)
+		.withDescription("Fail Flink JVM processes if 'OutOfMemoryError: Metaspace' is " +
+			"thrown while trying to load a user code class.");
+
 	public static String[] getParentFirstLoaderPatterns(Configuration config) {
 		String base = config.getString(ALWAYS_PARENT_FIRST_LOADER_PATTERNS);
 		String append = config.getString(ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL);
 		return parseParentFirstLoaderPatterns(base, append);
 	}
+
+	@Documentation.Section(Documentation.Sections.EXPERT_CLASS_LOADING)
+	public static final ConfigOption<Boolean> CHECK_LEAKED_CLASSLOADER = ConfigOptions
+		.key("classloader.check-leaked-classloader")
+		.booleanType()
+		.defaultValue(true)
+		.withDescription("Fails attempts at loading classes if the user classloader of a job is used after it has " +
+			"terminated.\n" +
+			"This is usually caused by the classloader being leaked by lingering threads or misbehaving libraries, " +
+			"which may also result in the classloader being used by other jobs.\n" +
+			"This check should only be disabled if such a leak prevents further jobs from running.");
 
 	/**
 	 * Plugin-specific option of {@link #ALWAYS_PARENT_FIRST_LOADER_PATTERNS}. Plugins use this parent first list

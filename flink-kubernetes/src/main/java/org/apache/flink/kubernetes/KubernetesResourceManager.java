@@ -22,6 +22,7 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.kubernetes.configuration.KubernetesConfigOptions;
 import org.apache.flink.kubernetes.configuration.KubernetesResourceManagerConfiguration;
 import org.apache.flink.kubernetes.kubeclient.FlinkKubeClient;
@@ -42,10 +43,10 @@ import org.apache.flink.runtime.heartbeat.HeartbeatServices;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.io.network.partition.ResourceManagerPartitionTrackerFactory;
 import org.apache.flink.runtime.metrics.groups.ResourceManagerMetricGroup;
-import org.apache.flink.runtime.resourcemanager.ActiveResourceManager;
 import org.apache.flink.runtime.resourcemanager.JobLeaderIdService;
 import org.apache.flink.runtime.resourcemanager.ResourceManager;
 import org.apache.flink.runtime.resourcemanager.WorkerResourceSpec;
+import org.apache.flink.runtime.resourcemanager.active.LegacyActiveResourceManager;
 import org.apache.flink.runtime.resourcemanager.exceptions.ResourceManagerException;
 import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManager;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
@@ -61,12 +62,11 @@ import javax.annotation.Nullable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Kubernetes specific implementation of the {@link ResourceManager}.
  */
-public class KubernetesResourceManager extends ActiveResourceManager<KubernetesWorkerNode>
+public class KubernetesResourceManager extends LegacyActiveResourceManager<KubernetesWorkerNode>
 	implements FlinkKubeClient.PodCallbackHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(KubernetesResourceManager.class);
@@ -141,23 +141,23 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 	}
 
 	@Override
-	public CompletableFuture<Void> onStop() {
+	public void terminate() throws Exception {
 		// shut down all components
-		Throwable throwable = null;
+		Exception exception = null;
 
 		try {
 			podsWatch.close();
-		} catch (Throwable t) {
-			throwable = t;
+		} catch (Exception e) {
+			exception = e;
 		}
 
 		try {
 			kubeClient.close();
-		} catch (Throwable t) {
-			throwable = ExceptionUtils.firstOrSuppressed(t, throwable);
+		} catch (Exception e) {
+			exception = ExceptionUtils.firstOrSuppressed(e, exception);
 		}
 
-		return getStopTerminationFutureOrCompletedExceptionally(throwable);
+		ExceptionUtils.tryRethrowException(exception);
 	}
 
 	@Override
@@ -184,7 +184,7 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 	@Override
 	public boolean stopWorker(final KubernetesWorkerNode worker) {
 		final ResourceID resourceId = worker.getResourceID();
-		LOG.info("Stopping Worker {}.", resourceId);
+		LOG.info("Stopping Worker {}.", resourceId.getStringWithMetadata());
 		internalStopPod(resourceId.toString());
 		return true;
 	}
@@ -207,17 +207,17 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 					podWorkerResources.get(podName),
 					"Unrecognized pod {}. Pods from previous attempt should have already been added.", podName);
 
-				final int pendingNum = getNumPendingWorkersFor(workerResourceSpec);
+				final int pendingNum = getNumRequestedNotAllocatedWorkersFor(workerResourceSpec);
 				Preconditions.checkState(pendingNum > 0, "Should not receive more workers than requested.");
 
-				notifyNewWorkerAllocated(workerResourceSpec);
+				notifyNewWorkerAllocated(workerResourceSpec, resourceID);
 				final KubernetesWorkerNode worker = new KubernetesWorkerNode(resourceID);
 				workerNodes.put(resourceID, worker);
 
 				log.info("Received new TaskManager pod: {}", podName);
 			}
 			log.info("Received {} new TaskManager pods. Remaining pending pod requests: {}",
-				pods.size() - duplicatePodNum, getNumPendingWorkers());
+				pods.size() - duplicatePodNum, getNumRequestedNotAllocatedWorkers());
 		});
 	}
 
@@ -267,7 +267,7 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 			createKubernetesTaskManagerParameters(workerResourceSpec);
 
 		podWorkerResources.put(parameters.getPodName(), workerResourceSpec);
-		final int pendingWorkerNum = notifyNewWorkerRequested(workerResourceSpec);
+		final int pendingWorkerNum = notifyNewWorkerRequested(workerResourceSpec).getNumNotAllocated();
 
 		log.info("Requesting new TaskManager pod with <{},{}>. Number pending requests {}.",
 			parameters.getTaskManagerMemoryMB(),
@@ -308,8 +308,11 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 		final ContaineredTaskManagerParameters taskManagerParameters =
 			ContaineredTaskManagerParameters.create(flinkConfig, taskExecutorProcessSpec);
 
+		final Configuration taskManagerConfig = new Configuration(flinkConfig);
+		taskManagerConfig.set(TaskManagerOptions.TASK_MANAGER_RESOURCE_ID, podName);
+
 		final String dynamicProperties =
-			BootstrapTools.getDynamicPropertiesAsString(flinkClientConfig, flinkConfig);
+			BootstrapTools.getDynamicPropertiesAsString(flinkClientConfig, taskManagerConfig);
 
 		return new KubernetesTaskManagerParameters(
 			flinkConfig,
@@ -327,7 +330,7 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 			final WorkerResourceSpec workerResourceSpec = entry.getKey();
 			final int requiredTaskManagers = entry.getValue();
 
-			while (requiredTaskManagers > getNumPendingWorkersFor(workerResourceSpec)) {
+			while (requiredTaskManagers > getNumRequestedNotRegisteredWorkersFor(workerResourceSpec)) {
 				requestKubernetesPod(workerResourceSpec);
 			}
 		}
@@ -360,6 +363,8 @@ public class KubernetesResourceManager extends ActiveResourceManager<KubernetesW
 			notifyNewWorkerAllocationFailed(
 				Preconditions.checkNotNull(workerResourceSpec,
 					"Worker resource spec of current attempt pending worker should be known."));
+		} else {
+			notifyAllocatedWorkerStopped(resourceId);
 		}
 	}
 

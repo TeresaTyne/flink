@@ -128,10 +128,10 @@ public class TableEnvHiveConnectorITCase {
 
 	@Test
 	public void testDifferentFormats() throws Exception {
-		String[] formats = new String[]{"orc", "parquet", "sequencefile", "csv"};
+		String[] formats = new String[]{"orc", "parquet", "sequencefile", "csv", "avro"};
 		for (String format : formats) {
-			if (format.equals("orc") && HiveShimLoader.getHiveVersion().startsWith("2.0")) {
-				// Ignore orc test for Hive version 2.0.x for now due to FLINK-13998
+			if (format.equals("avro") && !HiveVersionTestUtil.HIVE_110_OR_LATER) {
+				// timestamp is not supported for avro tables before 1.1.0
 				continue;
 			}
 			readWriteFormat(format);
@@ -187,11 +187,14 @@ public class TableEnvHiveConnectorITCase {
 
 		verifyFlinkQueryResult(tableEnv.sqlQuery("select * from db1.src"), expected);
 
-		// populate dest table with source table
-		TableEnvUtil.execInsertSqlAndWaitResult(tableEnv, "insert into db1.dest select * from db1.src");
+		// Ignore orc write test for Hive version 2.0.x for now due to FLINK-13998
+		if (!format.equals("orc") || !HiveShimLoader.getHiveVersion().startsWith("2.0")) {
+			// populate dest table with source table
+			TableEnvUtil.execInsertSqlAndWaitResult(tableEnv, "insert into db1.dest select * from db1.src");
 
-		// verify data on hive side
-		verifyHiveQueryResult("select * from db1.dest", expected);
+			// verify data on hive side
+			verifyHiveQueryResult("select * from db1.dest", expected);
+		}
 
 		tableEnv.executeSql("drop database db1 cascade");
 	}
@@ -578,7 +581,7 @@ public class TableEnvHiveConnectorITCase {
 		try {
 			tableEnv.executeSql("create table db1.src (x int,y string) " +
 					"row format serde 'org.apache.hadoop.hive.serde2.RegexSerDe' " +
-					"with serdeproperties ('input.regex'='([\\d]+)\\u0001([\\S]+)')");
+					"with serdeproperties ('input.regex'='([\\\\d]+)\\u0001([\\\\S]+)')");
 			HiveTestUtils.createTextTableInserter(hiveShell, "db1", "src")
 					.addRow(new Object[]{1, "a"})
 					.addRow(new Object[]{2, "ab"})
@@ -664,6 +667,36 @@ public class TableEnvHiveConnectorITCase {
 		} finally {
 			tableEnv.executeSql("drop database db1 cascade");
 		}
+	}
+
+	@Test
+	public void testInsertPartitionWithStarSource() throws Exception {
+		TableEnvironment tableEnv = getTableEnvWithHiveCatalog();
+		tableEnv.executeSql("create table src (x int,y string)");
+		HiveTestUtils.createTextTableInserter(
+				hiveShell,
+				"default",
+				"src")
+				.addRow(new Object[]{1, "a"})
+				.commit();
+		tableEnv.executeSql("create table dest (x int) partitioned by (p1 int,p2 string)");
+		TableEnvUtil.execInsertSqlAndWaitResult(tableEnv,
+				"insert into dest partition (p1=1) select * from src");
+		List<Row> results = Lists.newArrayList(tableEnv.sqlQuery("select * from dest").execute().collect());
+		assertEquals("[1,1,a]", results.toString());
+		tableEnv.executeSql("drop table if exists src");
+		tableEnv.executeSql("drop table if exists dest");
+	}
+
+	@Test
+	public void testInsertPartitionWithValuesSource() {
+		TableEnvironment tableEnv = getTableEnvWithHiveCatalog();
+		tableEnv.executeSql("create table dest (x int) partitioned by (p1 int,p2 string)");
+		TableEnvUtil.execInsertSqlAndWaitResult(tableEnv,
+				"insert into dest partition (p1=1) values(1, 'a')");
+		List<Row> results = Lists.newArrayList(tableEnv.sqlQuery("select * from dest").execute().collect());
+		assertEquals("[1,1,a]", results.toString());
+		tableEnv.executeSql("drop table if exists dest");
 	}
 
 	private TableEnvironment getTableEnvWithHiveCatalog() {

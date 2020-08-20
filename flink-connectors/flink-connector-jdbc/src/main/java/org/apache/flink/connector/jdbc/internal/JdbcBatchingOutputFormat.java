@@ -28,6 +28,7 @@ import org.apache.flink.connector.jdbc.internal.connection.SimpleJdbcConnectionP
 import org.apache.flink.connector.jdbc.internal.executor.JdbcBatchStatementExecutor;
 import org.apache.flink.connector.jdbc.internal.options.JdbcDmlOptions;
 import org.apache.flink.connector.jdbc.internal.options.JdbcOptions;
+import org.apache.flink.connector.jdbc.statement.FieldNamedPreparedStatementImpl;
 import org.apache.flink.connector.jdbc.utils.JdbcUtils;
 import org.apache.flink.runtime.util.ExecutorThreadFactory;
 import org.apache.flink.types.Row;
@@ -41,12 +42,14 @@ import javax.annotation.Nonnull;
 import java.io.IOException;
 import java.io.Serializable;
 import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static org.apache.flink.connector.jdbc.internal.options.JdbcOptions.CONNECTION_CHECK_TIMEOUT_SECONDS;
 import static org.apache.flink.connector.jdbc.utils.JdbcUtils.setRecordToStatement;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -129,7 +132,7 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 	private JdbcExec createAndOpenStatementExecutor(StatementExecutorFactory<JdbcExec> statementExecutorFactory) throws IOException {
 		JdbcExec exec = statementExecutorFactory.apply(getRuntimeContext());
 		try {
-			exec.open(connection);
+			exec.prepareStatements(connection);
 		} catch (SQLException e) {
 			throw new IOException("unable to open JDBC writer", e);
 		}
@@ -176,6 +179,16 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 					throw new IOException(e);
 				}
 				try {
+					if (!connection.isValid(CONNECTION_CHECK_TIMEOUT_SECONDS)) {
+						connection = connectionProvider.reestablishConnection();
+						jdbcStatementExecutor.closeStatements();
+						jdbcStatementExecutor.prepareStatements(connection);
+					}
+				} catch (Exception excpetion) {
+					LOG.error("JDBC connection is not valid, and reestablish connection failed.", excpetion);
+					throw new IOException("Reestablish JDBC connection failed", excpetion);
+				}
+				try {
 					Thread.sleep(1000 * i);
 				} catch (InterruptedException ex) {
 					Thread.currentThread().interrupt();
@@ -198,8 +211,6 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 		if (!closed) {
 			closed = true;
 
-			checkFlushException();
-
 			if (this.scheduledFuture != null) {
 				scheduledFuture.cancel(false);
 				this.scheduler.shutdown();
@@ -209,19 +220,21 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 				try {
 					flush();
 				} catch (Exception e) {
+					LOG.warn("Writing records to JDBC failed.", e);
 					throw new RuntimeException("Writing records to JDBC failed.", e);
 				}
 			}
 
 			try {
 				if (jdbcStatementExecutor != null) {
-					jdbcStatementExecutor.close();
+					jdbcStatementExecutor.closeStatements();
 				}
 			} catch (SQLException e) {
 				LOG.warn("Close JDBC writer failed.", e);
 			}
 		}
 		super.close();
+		checkFlushException();
 	}
 
 	public static Builder builder() {
@@ -313,7 +326,9 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 					executionOptionsBuilder.build());
 			} else {
 				// warn: don't close over builder fields
-				String sql = options.getDialect().getInsertIntoStatement(dml.getTableName(), dml.getFieldNames());
+				String sql = FieldNamedPreparedStatementImpl.parseNamedStatement(
+					options.getDialect().getInsertIntoStatement(dml.getTableName(), dml.getFieldNames()),
+					new HashMap<>());
 				return new JdbcBatchingOutputFormat<>(
 					new SimpleJdbcConnectionProvider(options),
 					executionOptionsBuilder.build(),
@@ -337,5 +352,4 @@ public class JdbcBatchingOutputFormat<In, JdbcIn, JdbcExec extends JdbcBatchStat
 	static JdbcStatementBuilder<Row> createRowJdbcStatementBuilder(int[] types) {
 		return (st, record) -> setRecordToStatement(st, types, record);
 	}
-
 }

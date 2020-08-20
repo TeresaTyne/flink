@@ -42,29 +42,6 @@ class JobExecutionResult(object):
         """
         return JobID(self._j_job_execution_result.getJobID())
 
-    def is_job_execution_result(self):
-        """
-        Checks if this JobSubmissionResult is also a JobExecutionResult.
-
-        .. seealso:: :func:`get_job_execution_result` to retrieve the JobExecutionResult.
-
-        :return: ``True`` if this is a JobExecutionResult, ``False`` otherwise.
-
-        .. versionadded:: 1.11.0
-        """
-        return self._j_job_execution_result.isJobExecutionResult()
-
-    def get_job_execution_result(self):
-        """
-        Returns the JobExecutionResult if available.
-
-        :throws: Exception if this is not a JobExecutionResult.
-        :return: The JobExecutionResult.
-
-        .. versionadded:: 1.11.0
-        """
-        return self
-
     def get_net_runtime(self):
         """
         Gets the net execution time of the job, i.e., the execution time in the parallel system,
@@ -104,7 +81,7 @@ class JobExecutionResult(object):
             accumulators[key] = j_result_map[key]
         return accumulators
 
-    def to_string(self):
+    def __str__(self):
         """
         Convert JobExecutionResult to a string, if possible.
 

@@ -19,11 +19,13 @@
 package org.apache.flink.connector.jdbc.table;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.connector.jdbc.dialect.JdbcDialect;
 import org.apache.flink.connector.jdbc.dialect.JdbcDialects;
 import org.apache.flink.connector.jdbc.internal.converter.JdbcRowConverter;
 import org.apache.flink.connector.jdbc.internal.options.JdbcLookupOptions;
 import org.apache.flink.connector.jdbc.internal.options.JdbcOptions;
+import org.apache.flink.connector.jdbc.statement.FieldNamedPreparedStatement;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.FunctionContext;
@@ -41,7 +43,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.flink.connector.jdbc.internal.options.JdbcOptions.CONNECTION_CHECK_TIMEOUT_SECONDS;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -67,6 +69,7 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 	private final String username;
 	private final String password;
 	private final DataType[] keyTypes;
+	private final String[] keyNames;
 	private final long cacheMaxSize;
 	private final long cacheExpireMs;
 	private final int maxRetryTimes;
@@ -75,7 +78,7 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 	private final JdbcRowConverter lookupKeyRowConverter;
 
 	private transient Connection dbConn;
-	private transient PreparedStatement statement;
+	private transient FieldNamedPreparedStatement statement;
 	private transient Cache<RowData, List<RowData>> cache;
 
 	public JdbcRowDataLookupFunction(
@@ -93,6 +96,7 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 		this.dbURL = options.getDbURL();
 		this.username = options.getUsername().orElse(null);
 		this.password = options.getPassword().orElse(null);
+		this.keyNames = keyNames;
 		List<String> nameList = Arrays.asList(fieldNames);
 		this.keyTypes = Arrays.stream(keyNames)
 			.map(s -> {
@@ -115,8 +119,7 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 	@Override
 	public void open(FunctionContext context) throws Exception {
 		try {
-			establishConnection();
-			statement = dbConn.prepareStatement(query);
+			establishConnectionAndStatement();
 			this.cache = cacheMaxSize == -1 || cacheExpireMs == -1 ? null : CacheBuilder.newBuilder()
 				.expireAfterWrite(cacheExpireMs, TimeUnit.MILLISECONDS)
 				.maximumSize(cacheMaxSize)
@@ -172,6 +175,17 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 				}
 
 				try {
+					if (!dbConn.isValid(CONNECTION_CHECK_TIMEOUT_SECONDS)) {
+						statement.close();
+						dbConn.close();
+						establishConnectionAndStatement();
+					}
+				} catch (SQLException | ClassNotFoundException excpetion) {
+					LOG.error("JDBC connection is not valid, and reestablish connection failed", excpetion);
+					throw new RuntimeException("Reestablish JDBC connection failed", excpetion);
+				}
+
+				try {
 					Thread.sleep(1000 * retry);
 				} catch (InterruptedException e1) {
 					throw new RuntimeException(e1);
@@ -180,13 +194,14 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 		}
 	}
 
-	private void establishConnection() throws SQLException, ClassNotFoundException {
+	private void establishConnectionAndStatement() throws SQLException, ClassNotFoundException {
 		Class.forName(drivername);
 		if (username == null) {
 			dbConn = DriverManager.getConnection(dbURL);
 		} else {
 			dbConn = DriverManager.getConnection(dbURL, username, password);
 		}
+		statement = FieldNamedPreparedStatement.prepareStatement(dbConn, query, keyNames);
 	}
 
 	@Override
@@ -214,5 +229,10 @@ public class JdbcRowDataLookupFunction extends TableFunction<RowData> {
 				dbConn = null;
 			}
 		}
+	}
+
+	@VisibleForTesting
+	public Connection getDbConnection() {
+		return dbConn;
 	}
 }

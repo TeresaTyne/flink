@@ -24,14 +24,15 @@ from pyflink.find_flink_home import _find_flink_source_root
 from pyflink.java_gateway import get_gateway
 from pyflink.table import DataTypes, ResultKind
 from pyflink.testing import source_sink_utils
-from pyflink.testing.test_case_utils import PyFlinkStreamTableTestCase, PyFlinkBatchTableTestCase
+from pyflink.testing.test_case_utils import PyFlinkStreamTableTestCase, PyFlinkBatchTableTestCase,\
+    exec_insert_table
 
 
 class SqlTests(object):
 
     def test_sql_ddl(self):
-        self.t_env.sql_update("create temporary function func1 as "
-                              "'pyflink.table.tests.test_udf.add' language python")
+        self.t_env.execute_sql("create temporary function func1 as "
+                               "'pyflink.table.tests.test_udf.add' language python")
         table = self.t_env.from_elements([(1, 2)]).alias("a, b").select("func1(a, b)")
         plan = table.explain()
         self.assertTrue(plan.find("PythonCalc(select=[add(f0, f1) AS _c0])") >= 0)
@@ -49,8 +50,7 @@ class StreamSqlTests(SqlTests, PyFlinkStreamTableTestCase):
             source_sink_utils.TestAppendSink(field_names, field_types))
 
         result = t_env.sql_query("select a + 1, b, c from %s" % source)
-        result.insert_into("sinks")
-        self.t_env.execute("test")
+        exec_insert_table(result, "sinks")
         actual = source_sink_utils.results()
 
         expected = ['2,Hi,Hello', '3,Hello,Hello']
@@ -84,10 +84,8 @@ class StreamSqlTests(SqlTests, PyFlinkStreamTableTestCase):
             "sinks",
             source_sink_utils.TestAppendSink(field_names, field_types))
         table_result = t_env.execute_sql("insert into sinks select * from tbl")
-        job_execution_result = table_result.get_job_client().get_job_execution_result(
-            get_gateway().jvm.Thread.currentThread().getContextClassLoader()).result()
+        job_execution_result = table_result.get_job_client().get_job_execution_result().result()
         self.assertIsNotNone(job_execution_result.get_job_id())
-        self.assertIsNotNone(job_execution_result.get_job_execution_result())
         self.assert_equals(table_result.get_table_schema().get_field_names(),
                            ["default_catalog.default_database.sinks"])
         self.assertEqual(table_result.get_result_kind(), ResultKind.SUCCESS_WITH_CONTENT)

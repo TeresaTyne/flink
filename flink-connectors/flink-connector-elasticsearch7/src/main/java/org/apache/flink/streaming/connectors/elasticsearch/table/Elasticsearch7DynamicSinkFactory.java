@@ -31,6 +31,7 @@ import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.factories.SerializationFormatFactory;
 import org.apache.flink.table.utils.TableSchemaUtils;
+import org.apache.flink.util.StringUtils;
 
 import java.util.Set;
 import java.util.function.Supplier;
@@ -51,6 +52,8 @@ import static org.apache.flink.streaming.connectors.elasticsearch.table.Elastics
 import static org.apache.flink.streaming.connectors.elasticsearch.table.ElasticsearchOptions.HOSTS_OPTION;
 import static org.apache.flink.streaming.connectors.elasticsearch.table.ElasticsearchOptions.INDEX_OPTION;
 import static org.apache.flink.streaming.connectors.elasticsearch.table.ElasticsearchOptions.KEY_DELIMITER_OPTION;
+import static org.apache.flink.streaming.connectors.elasticsearch.table.ElasticsearchOptions.PASSWORD_OPTION;
+import static org.apache.flink.streaming.connectors.elasticsearch.table.ElasticsearchOptions.USERNAME_OPTION;
 
 /**
  * A {@link DynamicTableSinkFactory} for discovering {@link Elasticsearch7DynamicSink}.
@@ -73,7 +76,9 @@ public class Elasticsearch7DynamicSinkFactory implements DynamicTableSinkFactory
 		BULK_FLUSH_BACKOFF_DELAY_OPTION,
 		CONNECTION_MAX_RETRY_TIMEOUT_OPTION,
 		CONNECTION_PATH_PREFIX,
-		FORMAT_OPTION
+		FORMAT_OPTION,
+		PASSWORD_OPTION,
+		USERNAME_OPTION
 	).collect(Collectors.toSet());
 
 	@Override
@@ -94,7 +99,7 @@ public class Elasticsearch7DynamicSinkFactory implements DynamicTableSinkFactory
 			.forEach(configuration::setString);
 		Elasticsearch7Configuration config = new Elasticsearch7Configuration(configuration, context.getClassLoader());
 
-		validateOptions(config, configuration);
+		validate(config, configuration);
 
 		return new Elasticsearch7DynamicSink(
 			format,
@@ -102,36 +107,50 @@ public class Elasticsearch7DynamicSinkFactory implements DynamicTableSinkFactory
 			TableSchemaUtils.getPhysicalSchema(tableSchema));
 	}
 
-	private void validateOptions(Elasticsearch7Configuration config, Configuration originalConfiguration) {
+	private void validate(Elasticsearch7Configuration config, Configuration originalConfiguration) {
 		config.getFailureHandler(); // checks if we can instantiate the custom failure handler
 		config.getHosts(); // validate hosts
-		validateOptions(
+		validate(
 			config.getIndex().length() >= 1,
 			() -> String.format("'%s' must not be empty", INDEX_OPTION.key()));
-		validateOptions(
-			config.getBulkFlushMaxActions().map(maxActions -> maxActions >= 1).orElse(true),
+		int maxActions = config.getBulkFlushMaxActions();
+		validate(
+			maxActions == -1 || maxActions >= 1,
 			() -> String.format(
-				"'%s' must be at least 1 character. Got: %s",
+				"'%s' must be at least 1. Got: %s",
 				BULK_FLUSH_MAX_ACTIONS_OPTION.key(),
-				config.getBulkFlushMaxActions().get())
+				maxActions)
 		);
-		validateOptions(
-			config.getBulkFlushMaxSize().map(maxSize -> maxSize >= 1024 * 1024).orElse(true),
+		long maxSize = config.getBulkFlushMaxByteSize();
+		long mb1 = 1024 * 1024;
+		validate(
+			maxSize == -1 || (maxSize >= mb1 && maxSize % mb1 == 0),
 			() -> String.format(
-				"'%s' must be at least 1mb character. Got: %s",
+				"'%s' must be in MB granularity. Got: %s",
 				BULK_FLASH_MAX_SIZE_OPTION.key(),
 				originalConfiguration.get(BULK_FLASH_MAX_SIZE_OPTION).toHumanReadableString())
 		);
-		validateOptions(
+		validate(
 			config.getBulkFlushBackoffRetries().map(retries -> retries >= 1).orElse(true),
 			() -> String.format(
 				"'%s' must be at least 1. Got: %s",
 				BULK_FLUSH_BACKOFF_MAX_RETRIES_OPTION.key(),
 				config.getBulkFlushBackoffRetries().get())
 		);
+		if (config.getUsername().isPresent() && !StringUtils.isNullOrWhitespaceOnly(config.getUsername().get())) {
+			validate(
+				config.getPassword().isPresent() && !StringUtils.isNullOrWhitespaceOnly(config.getPassword().get()),
+				() -> String.format(
+					"'%s' and '%s' must be set at the same time. Got: username '%s' and password '%s'",
+					USERNAME_OPTION.key(),
+					PASSWORD_OPTION.key(),
+					config.getUsername().get(),
+					config.getPassword().orElse("")
+				));
+		}
 	}
 
-	private static void validateOptions(boolean condition, Supplier<String> message) {
+	private static void validate(boolean condition, Supplier<String> message) {
 		if (!condition) {
 			throw new ValidationException(message.get());
 		}

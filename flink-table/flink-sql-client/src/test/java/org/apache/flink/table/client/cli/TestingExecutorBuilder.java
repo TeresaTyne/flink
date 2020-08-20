@@ -22,9 +22,10 @@ import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.client.gateway.SqlExecutionException;
 import org.apache.flink.table.client.gateway.TypedResult;
 import org.apache.flink.types.Row;
-import org.apache.flink.util.function.BiConsumerWithException;
 import org.apache.flink.util.function.BiFunctionWithException;
+import org.apache.flink.util.function.FunctionWithException;
 import org.apache.flink.util.function.SupplierWithException;
+import org.apache.flink.util.function.TriFunctionWithException;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -35,12 +36,14 @@ import java.util.List;
  */
 class TestingExecutorBuilder {
 
+	private String defaultCurrentCatalogName = "default_catalog";
+	private String defaultCurrentDatabaseName = "default_database";
 	private List<SupplierWithException<TypedResult<List<Tuple2<Boolean, Row>>>, SqlExecutionException>> resultChangesSupplier = Collections.emptyList();
 	private List<SupplierWithException<TypedResult<Integer>, SqlExecutionException>> snapshotResultsSupplier = Collections.emptyList();
 	private List<SupplierWithException<List<Row>, SqlExecutionException>> resultPagesSupplier = Collections.emptyList();
-	private BiConsumerWithException<String, String, SqlExecutionException> setUseCatalogConsumer = (ignoredA, ignoredB) -> {};
-	private BiConsumerWithException<String, String, SqlExecutionException> setUseDatabaseConsumer = (ignoredA, ignoredB) -> {};
 	private BiFunctionWithException<String, String, TableResult, SqlExecutionException> setExecuteSqlConsumer = (ignoredA, ignoredB) -> null;
+	private TriFunctionWithException<String, String, String, Void, SqlExecutionException> setSessionPropertyFunction = (ignoredA, ignoredB, ignoredC) -> null;
+	private FunctionWithException<String, Void, SqlExecutionException> resetSessionPropertiesFunction = (ignoredA) -> null;
 
 	@SafeVarargs
 	public final TestingExecutorBuilder setResultChangesSupplier(SupplierWithException<TypedResult<List<Tuple2<Boolean, Row>>>, SqlExecutionException> ... resultChangesSupplier) {
@@ -60,19 +63,19 @@ class TestingExecutorBuilder {
 		return this;
 	}
 
-	public final TestingExecutorBuilder setUseCatalogConsumer(BiConsumerWithException<String, String, SqlExecutionException> useCatalogConsumer) {
-		this.setUseCatalogConsumer = useCatalogConsumer;
-		return this;
-	}
-
-	public final TestingExecutorBuilder setUseDatabaseConsumer(BiConsumerWithException<String, String, SqlExecutionException> useDatabaseConsumer) {
-		this.setUseDatabaseConsumer = useDatabaseConsumer;
-		return this;
-	}
-
 	public final TestingExecutorBuilder setExecuteSqlConsumer(
 			BiFunctionWithException<String, String, TableResult, SqlExecutionException> setExecuteUpdateConsumer) {
 		this.setExecuteSqlConsumer = setExecuteUpdateConsumer;
+		return this;
+	}
+
+	public final TestingExecutorBuilder setSessionPropertiesFunction(TriFunctionWithException<String, String, String, Void, SqlExecutionException> setSessionPropertyFunction) {
+		this.setSessionPropertyFunction = setSessionPropertyFunction;
+		return this;
+	}
+
+	public final TestingExecutorBuilder resetSessionPropertiesFunction(FunctionWithException<String, Void, SqlExecutionException> resetSessionPropertiesFunction) {
+		this.resetSessionPropertiesFunction = resetSessionPropertiesFunction;
 		return this;
 	}
 
@@ -81,8 +84,8 @@ class TestingExecutorBuilder {
 			resultChangesSupplier,
 			snapshotResultsSupplier,
 			resultPagesSupplier,
-			setUseCatalogConsumer,
-			setUseDatabaseConsumer,
-			setExecuteSqlConsumer);
+			setExecuteSqlConsumer,
+			setSessionPropertyFunction,
+			resetSessionPropertiesFunction);
 	}
 }

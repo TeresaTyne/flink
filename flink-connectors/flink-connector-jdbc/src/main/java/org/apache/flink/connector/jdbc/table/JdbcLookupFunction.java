@@ -18,10 +18,12 @@
 
 package org.apache.flink.connector.jdbc.table;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
 import org.apache.flink.connector.jdbc.internal.options.JdbcLookupOptions;
 import org.apache.flink.connector.jdbc.internal.options.JdbcOptions;
+import org.apache.flink.connector.jdbc.statement.FieldNamedPreparedStatementImpl;
 import org.apache.flink.connector.jdbc.utils.JdbcTypeUtil;
 import org.apache.flink.connector.jdbc.utils.JdbcUtils;
 import org.apache.flink.table.functions.FunctionContext;
@@ -42,9 +44,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.flink.connector.jdbc.internal.options.JdbcOptions.CONNECTION_CHECK_TIMEOUT_SECONDS;
 import static org.apache.flink.connector.jdbc.utils.JdbcUtils.getFieldFromResultSet;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -73,6 +77,7 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 	private final TypeInformation[] keyTypes;
 	private final int[] keySqlTypes;
 	private final String[] fieldNames;
+	private final String[] keyNames;
 	private final TypeInformation[] fieldTypes;
 	private final int[] outputSqlTypes;
 	private final long cacheMaxSize;
@@ -92,6 +97,7 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 		this.password = options.getPassword().orElse(null);
 		this.fieldNames = fieldNames;
 		this.fieldTypes = fieldTypes;
+		this.keyNames = keyNames;
 		List<String> nameList = Arrays.asList(fieldNames);
 		this.keyTypes = Arrays.stream(keyNames)
 				.map(s -> {
@@ -105,8 +111,9 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 		this.maxRetryTimes = lookupOptions.getMaxRetryTimes();
 		this.keySqlTypes = Arrays.stream(keyTypes).mapToInt(JdbcTypeUtil::typeInformationToSqlType).toArray();
 		this.outputSqlTypes = Arrays.stream(fieldTypes).mapToInt(JdbcTypeUtil::typeInformationToSqlType).toArray();
-		this.query = options.getDialect().getSelectFromStatement(
-				options.getTableName(), fieldNames, keyNames);
+		this.query = FieldNamedPreparedStatementImpl.parseNamedStatement(
+			options.getDialect().getSelectFromStatement(options.getTableName(), fieldNames, keyNames),
+			new HashMap<>());
 	}
 
 	public static Builder builder() {
@@ -116,8 +123,7 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 	@Override
 	public void open(FunctionContext context) throws Exception {
 		try {
-			establishConnection();
-			statement = dbConn.prepareStatement(query);
+			establishConnectionAndStatement();
 			this.cache = cacheMaxSize == -1 || cacheExpireMs == -1 ? null : CacheBuilder.newBuilder()
 					.expireAfterWrite(cacheExpireMs, TimeUnit.MILLISECONDS)
 					.maximumSize(cacheMaxSize)
@@ -171,6 +177,17 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 				}
 
 				try {
+					if (!dbConn.isValid(CONNECTION_CHECK_TIMEOUT_SECONDS)) {
+						statement.close();
+						dbConn.close();
+						establishConnectionAndStatement();
+					}
+				} catch (SQLException | ClassNotFoundException excpetion) {
+					LOG.error("JDBC connection is not valid, and reestablish connection failed", excpetion);
+					throw new RuntimeException("Reestablish JDBC connection failed", excpetion);
+				}
+
+				try {
 					Thread.sleep(1000 * retry);
 				} catch (InterruptedException e1) {
 					throw new RuntimeException(e1);
@@ -187,13 +204,14 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 		return row;
 	}
 
-	private void establishConnection() throws SQLException, ClassNotFoundException {
+	private void establishConnectionAndStatement() throws SQLException, ClassNotFoundException {
 		Class.forName(drivername);
 		if (username == null) {
 			dbConn = DriverManager.getConnection(dbURL);
 		} else {
 			dbConn = DriverManager.getConnection(dbURL, username, password);
 		}
+		statement = dbConn.prepareStatement(query);
 	}
 
 	@Override
@@ -221,6 +239,11 @@ public class JdbcLookupFunction extends TableFunction<Row> {
 				dbConn = null;
 			}
 		}
+	}
+
+	@VisibleForTesting
+	public Connection getDbConnection() {
+		return dbConn;
 	}
 
 	@Override

@@ -28,10 +28,12 @@ import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.blob.BlobServer;
 import org.apache.flink.runtime.checkpoint.Checkpoints;
 import org.apache.flink.runtime.client.DuplicateJobSubmissionException;
+import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.client.JobSubmissionException;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.entrypoint.ClusterEntryPointExceptionUtils;
 import org.apache.flink.runtime.executiongraph.ArchivedExecutionGraph;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
@@ -71,7 +73,6 @@ import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.function.BiConsumerWithException;
-import org.apache.flink.util.function.CheckedSupplier;
 import org.apache.flink.util.function.FunctionUtils;
 import org.apache.flink.util.function.FunctionWithException;
 
@@ -157,7 +158,8 @@ public abstract class Dispatcher extends PermanentlyFencedRpcEndpoint<Dispatcher
 
 		this.jobManagerSharedServices = JobManagerSharedServices.fromConfiguration(
 			configuration,
-			blobServer);
+			blobServer,
+			fatalErrorHandler);
 
 		this.runningJobsRegistry = highAvailabilityServices.getRunningJobsRegistry();
 
@@ -337,6 +339,7 @@ public abstract class Dispatcher extends PermanentlyFencedRpcEndpoint<Dispatcher
 			if (throwable != null) {
 				cleanUpJobData(jobGraph.getJobID(), true);
 
+				ClusterEntryPointExceptionUtils.tryEnrichClusterEntryPointError(throwable);
 				final Throwable strippedThrowable = ExceptionUtils.stripCompletionException(throwable);
 				log.error("Failed to submit job {}.", jobGraph.getJobID(), strippedThrowable);
 				throw new CompletionException(
@@ -382,16 +385,21 @@ public abstract class Dispatcher extends PermanentlyFencedRpcEndpoint<Dispatcher
 		final RpcService rpcService = getRpcService();
 
 		return CompletableFuture.supplyAsync(
-			CheckedSupplier.unchecked(() ->
-				jobManagerRunnerFactory.createJobManagerRunner(
-					jobGraph,
-					configuration,
-					rpcService,
-					highAvailabilityServices,
-					heartbeatServices,
-					jobManagerSharedServices,
-					new DefaultJobManagerJobMetricGroupFactory(jobManagerMetricGroup),
-					fatalErrorHandler)),
+			() -> {
+				try {
+					return jobManagerRunnerFactory.createJobManagerRunner(
+						jobGraph,
+						configuration,
+						rpcService,
+						highAvailabilityServices,
+						heartbeatServices,
+						jobManagerSharedServices,
+						new DefaultJobManagerJobMetricGroupFactory(jobManagerMetricGroup),
+						fatalErrorHandler);
+				} catch (Exception e) {
+					throw new CompletionException(new JobExecutionException(jobGraph.getJobID(), "Could not instantiate JobManager.", e));
+				}
+			},
 			rpcService.getExecutor());
 	}
 

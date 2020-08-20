@@ -53,7 +53,7 @@ import org.apache.flink.table.planner.runtime.utils.TestingAppendRowDataSink;
 import org.apache.flink.table.planner.runtime.utils.TestingAppendSink;
 import org.apache.flink.table.planner.utils.JavaScalaConversionUtil;
 import org.apache.flink.table.planner.utils.TableTestUtil;
-import org.apache.flink.table.runtime.typeutils.RowDataTypeInfo;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.types.Row;
 
@@ -289,6 +289,14 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 			assertTrue(optimizedPlan, optimizedPlan.contains("PartitionPruned: true, PartitionNums: 1"));
 			results = Lists.newArrayList(query.execute().collect());
 			assertEquals("[4]", results.toString());
+
+			query = tableEnv.sqlQuery("select x from db1.part where '' = p2");
+			explain = query.explain().split("==.*==\n");
+			assertFalse(catalog.fallback);
+			optimizedPlan = explain[2];
+			assertTrue(optimizedPlan, optimizedPlan.contains("PartitionPruned: true, PartitionNums: 0"));
+			results = Lists.newArrayList(query.execute().collect());
+			assertEquals("[]", results.toString());
 		} finally {
 			tableEnv.executeSql("drop database db1 cascade");
 		}
@@ -319,7 +327,11 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 			assertTrue(optimizedPlan, optimizedPlan.contains("PartitionPruned: true, PartitionNums: 1"));
 			List<Row> results = Lists.newArrayList(query.execute().collect());
 			assertEquals("[3]", results.toString());
-			System.out.println(results);
+
+			// filter by timestamp partition
+			query = tableEnv.sqlQuery("select x from db1.part where timestamp '2018-08-08 08:08:09' = p2");
+			results = Lists.newArrayList(query.execute().collect());
+			assertEquals("[2]", results.toString());
 		} finally {
 			tableEnv.executeSql("drop database db1 cascade");
 		}
@@ -473,7 +485,7 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 				" b STRING" +
 				") PARTITIONED BY (ts STRING) TBLPROPERTIES (" +
 				"'streaming-source.enable'='true'," +
-				"'streaming-source.monitor-interval'='100ms'," +
+				"'streaming-source.monitor-interval'='1s'," +
 				"'streaming-source.consume-order'='partition-time'" +
 				")");
 
@@ -483,7 +495,7 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 
 		Table src = tEnv.from("hive.source_db.stream_test");
 
-		TestingAppendRowDataSink sink = new TestingAppendRowDataSink(new RowDataTypeInfo(
+		TestingAppendRowDataSink sink = new TestingAppendRowDataSink(InternalTypeInfo.ofFields(
 				DataTypes.INT().getLogicalType(),
 				DataTypes.STRING().getLogicalType(),
 				DataTypes.STRING().getLogicalType()));
@@ -502,6 +514,7 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 				}
 				HiveTestUtils.createTextTableInserter(hiveShell, dbName, tblName)
 						.addRow(new Object[]{i, String.valueOf(i)})
+						.addRow(new Object[]{i, i + "_copy"})
 						.commit("ts='2020-05-06 00:" + i + "0:00'");
 			}
 		};
@@ -514,10 +527,15 @@ public class HiveTableSourceITCase extends BatchAbstractTestBase {
 		List<String> expected = Arrays.asList(
 				"+I(0,0,2020-05-06 00:00:00)",
 				"+I(1,1,2020-05-06 00:10:00)",
+				"+I(1,1_copy,2020-05-06 00:10:00)",
 				"+I(2,2,2020-05-06 00:20:00)",
+				"+I(2,2_copy,2020-05-06 00:20:00)",
 				"+I(3,3,2020-05-06 00:30:00)",
+				"+I(3,3_copy,2020-05-06 00:30:00)",
 				"+I(4,4,2020-05-06 00:40:00)",
-				"+I(5,5,2020-05-06 00:50:00)"
+				"+I(4,4_copy,2020-05-06 00:40:00)",
+				"+I(5,5,2020-05-06 00:50:00)",
+				"+I(5,5_copy,2020-05-06 00:50:00)"
 		);
 		List<String> results = sink.getJavaAppendResults();
 		results.sort(String::compareTo);

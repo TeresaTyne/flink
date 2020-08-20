@@ -28,6 +28,8 @@ import org.junit.Test;
 
 import java.util.List;
 
+import static org.apache.flink.kubernetes.utils.Constants.CONFIG_FILE_LOG4J_NAME;
+import static org.apache.flink.kubernetes.utils.Constants.CONFIG_FILE_LOGBACK_NAME;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -42,8 +44,8 @@ public class KubernetesTaskManagerFactoryTest extends KubernetesTaskManagerTestB
 	protected void onSetup() throws Exception {
 		super.onSetup();
 
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "logback.xml");
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "log4j.properties");
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOGBACK_NAME);
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOG4J_NAME);
 
 		setHadoopConfDirEnv();
 		generateHadoopConfFileItems();
@@ -71,7 +73,7 @@ public class KubernetesTaskManagerFactoryTest extends KubernetesTaskManagerTestB
 		assertEquals(CONTAINER_IMAGE, resultMainContainer.getImage());
 		assertEquals(CONTAINER_IMAGE_PULL_POLICY.name(), resultMainContainer.getImagePullPolicy());
 
-		assertEquals(4, resultMainContainer.getEnv().size());
+		assertEquals(3, resultMainContainer.getEnv().size());
 		assertTrue(resultMainContainer.getEnv()
 			.stream()
 			.anyMatch(envVar -> envVar.getName().equals("key1")));

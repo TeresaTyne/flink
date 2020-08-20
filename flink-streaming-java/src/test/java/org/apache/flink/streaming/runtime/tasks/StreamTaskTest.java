@@ -19,6 +19,7 @@
 package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
@@ -59,6 +60,7 @@ import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
 import org.apache.flink.runtime.shuffle.ShuffleEnvironment;
 import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
 import org.apache.flink.runtime.state.AbstractStateBackend;
+import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.DoneFuture;
 import org.apache.flink.runtime.state.KeyGroupRange;
@@ -133,7 +135,6 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.StreamCorruptedException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -150,6 +151,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import static java.util.Arrays.asList;
 import static org.apache.flink.runtime.checkpoint.StateObjectCollection.singleton;
 import static org.apache.flink.streaming.util.StreamTaskUtil.waitTaskIsRunning;
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -207,7 +209,15 @@ public class StreamTaskTest extends TestLogger {
 			testHarness.waitForTaskCompletion();
 		}
 		catch (Exception ex) {
-			if (!ExceptionUtils.findThrowable(ex, ExpectedTestException.class).isPresent()) {
+			// make sure the original exception is the cause and not wrapped
+			if (!(ex.getCause() instanceof ExpectedTestException)) {
+				throw ex;
+			}
+			// make sure DisposeException is the only suppressed exception
+			if (ex.getCause().getSuppressed().length != 1) {
+				throw ex;
+			}
+			if (!(ex.getCause().getSuppressed()[0] instanceof FailingTwiceOperator.DisposeException)) {
 				throw ex;
 			}
 		}
@@ -223,7 +233,13 @@ public class StreamTaskTest extends TestLogger {
 
 		@Override
 		public void dispose() throws Exception {
-			fail("This exception should be suppressed");
+			throw new DisposeException();
+		}
+
+		class DisposeException extends Exception {
+			public DisposeException() {
+				super("Dispose Exception. This exception should be suppressed");
+			}
 		}
 	}
 
@@ -692,7 +708,7 @@ public class StreamTaskTest extends TestLogger {
 
 		TaskStateManager taskStateManager = new TaskStateManagerImpl(
 			new JobID(1L, 2L),
-			new ExecutionAttemptID(1L, 2L),
+			new ExecutionAttemptID(),
 			mock(TaskLocalStateStoreImpl.class),
 			null,
 			checkpointResponder);
@@ -816,7 +832,7 @@ public class StreamTaskTest extends TestLogger {
 		task.streamTask.cancel();
 
 		final FutureUtils.ConjunctFuture<Void> discardFuture = FutureUtils.waitForAll(
-			Arrays.asList(
+			asList(
 				managedKeyedStateHandle.getDiscardFuture(),
 				rawKeyedStateHandle.getDiscardFuture(),
 				managedOperatorStateHandle.getDiscardFuture(),
@@ -866,7 +882,7 @@ public class StreamTaskTest extends TestLogger {
 
 		TaskStateManager taskStateManager = new TaskStateManagerImpl(
 			new JobID(1L, 2L),
-			new ExecutionAttemptID(1L, 2L),
+			new ExecutionAttemptID(),
 			mock(TaskLocalStateStoreImpl.class),
 			null,
 			checkpointResponder);
@@ -947,8 +963,8 @@ public class StreamTaskTest extends TestLogger {
 	@Test
 	public void testNotifyCheckpointOnClosedOperator() throws Throwable {
 		ClosingOperator operator = new ClosingOperator();
-		MultipleInputStreamTaskTestHarnessBuilder<Integer> builder =
-			new MultipleInputStreamTaskTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
+		StreamTaskMailboxTestHarnessBuilder<Integer> builder =
+			new StreamTaskMailboxTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
 				.addInput(BasicTypeInfo.INT_TYPE_INFO);
 		StreamTaskMailboxTestHarness<Integer> harness = builder
 			.setupOutputForSingletonOperatorChain(operator)
@@ -981,12 +997,12 @@ public class StreamTaskTest extends TestLogger {
 	}
 
 	private void testFailToConfirmCheckpointMessage(Consumer<StreamTask<?, ?>> consumer) throws Exception {
-		FailOnNotifyCheckpointOperator<Integer> operator = new FailOnNotifyCheckpointOperator<>();
-		MultipleInputStreamTaskTestHarnessBuilder<Integer> builder =
-			new MultipleInputStreamTaskTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
+		StreamMap<Integer, Integer> streamMap = new StreamMap<>(new FailOnNotifyCheckpointMapper<>());
+		StreamTaskMailboxTestHarnessBuilder<Integer> builder =
+			new StreamTaskMailboxTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
 				.addInput(BasicTypeInfo.INT_TYPE_INFO);
 		StreamTaskMailboxTestHarness<Integer> harness = builder
-			.setupOutputForSingletonOperatorChain(operator)
+			.setupOutputForSingletonOperatorChain(streamMap)
 			.build();
 
 		try {
@@ -1006,8 +1022,8 @@ public class StreamTaskTest extends TestLogger {
 	@Test
 	public void testCheckpointDeclinedOnClosedOperator() throws Throwable {
 		ClosingOperator operator = new ClosingOperator();
-		MultipleInputStreamTaskTestHarnessBuilder<Integer> builder =
-			new MultipleInputStreamTaskTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
+		StreamTaskMailboxTestHarnessBuilder<Integer> builder =
+			new StreamTaskMailboxTestHarnessBuilder<>(OneInputStreamTask::new, BasicTypeInfo.INT_TYPE_INFO)
 					.addInput(BasicTypeInfo.INT_TYPE_INFO);
 		StreamTaskMailboxTestHarness<Integer> harness = builder
 			.setupOutputForSingletonOperatorChain(operator)
@@ -1057,8 +1073,8 @@ public class StreamTaskTest extends TestLogger {
 		}
 
 		MockEnvironment mockEnvironment = new MockEnvironmentBuilder().build();
-		mockEnvironment.addOutputs(Arrays.asList(partitions));
-		mockEnvironment.addInputs(Arrays.asList(gates));
+		mockEnvironment.addOutputs(asList(partitions));
+		mockEnvironment.addInputs(asList(gates));
 		StreamTask task = new MockStreamTaskBuilder(mockEnvironment).build();
 		try {
 			verifyResults(gates, partitions, false, false);
@@ -1093,8 +1109,8 @@ public class StreamTaskTest extends TestLogger {
 			NoOpCheckpointResponder.INSTANCE,
 			reader);
 		MockEnvironment mockEnvironment = new MockEnvironmentBuilder().setTaskStateManager(taskStateManager).build();
-		mockEnvironment.addOutputs(Arrays.asList(partitions));
-		mockEnvironment.addInputs(Arrays.asList(gates));
+		mockEnvironment.addOutputs(asList(partitions));
+		mockEnvironment.addInputs(asList(gates));
 		StreamTask task = new MockStreamTaskBuilder(mockEnvironment).build();
 		try {
 			verifyResults(gates, partitions, false, false);
@@ -2047,22 +2063,22 @@ public class StreamTaskTest extends TestLogger {
 		}
 	}
 
-	private static class FailOnNotifyCheckpointOperator<T> extends AbstractStreamOperator<T> implements OneInputStreamOperator<T, T> {
+	private static class FailOnNotifyCheckpointMapper<T> implements MapFunction<T, T>, CheckpointListener {
+		private static final long serialVersionUID = 1L;
+
 		@Override
-		public void notifyCheckpointComplete(long checkpointId) throws Exception {
-			super.notifyCheckpointComplete(checkpointId);
+		public T map(T value) throws Exception {
+			return value;
+		}
+
+		@Override
+		public void notifyCheckpointAborted(long checkpointId) {
 			throw new ExpectedTestException();
 		}
 
 		@Override
-		public void notifyCheckpointAborted(long checkpointId) throws Exception {
-			super.notifyCheckpointAborted(checkpointId);
+		public void notifyCheckpointComplete(long checkpointId) {
 			throw new ExpectedTestException();
-		}
-
-		@Override
-		public void processElement(StreamRecord<T> element) throws Exception {
-
 		}
 	}
 }

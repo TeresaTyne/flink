@@ -25,6 +25,7 @@ import org.apache.flink.connectors.hive.write.HiveOutputFormatFactory;
 import org.apache.flink.connectors.hive.write.HiveWriterFactory;
 import org.apache.flink.formats.parquet.row.ParquetRowDataBuilder;
 import org.apache.flink.orc.OrcSplitReaderUtil;
+import org.apache.flink.orc.writer.ThreadLocalClassLoaderConfiguration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.functions.sink.filesystem.HadoopPathBasedBulkFormatBuilder;
@@ -77,9 +78,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
+import static org.apache.flink.table.filesystem.FileSystemOptions.SINK_ROLLING_POLICY_CHECK_INTERVAL;
 import static org.apache.flink.table.filesystem.FileSystemOptions.SINK_ROLLING_POLICY_FILE_SIZE;
-import static org.apache.flink.table.filesystem.FileSystemOptions.SINK_ROLLING_POLICY_TIME_INTERVAL;
+import static org.apache.flink.table.filesystem.FileSystemOptions.SINK_ROLLING_POLICY_ROLLOVER_INTERVAL;
 
 /**
  * Table sink to write to Hive tables.
@@ -126,6 +129,7 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 			StorageDescriptor sd = table.getSd();
 			HiveTableMetaStoreFactory msFactory = new HiveTableMetaStoreFactory(
 					jobConf, hiveVersion, dbName, tableName);
+			HadoopFileSystemFactory fsFactory = new HadoopFileSystemFactory(jobConf);
 
 			Class hiveOutputFormatClz = hiveShim.getHiveOutputFormatClass(
 					Class.forName(sd.getOutputFormat()));
@@ -141,9 +145,10 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 					isCompressed);
 			String extension = Utilities.getFileExtension(jobConf, isCompressed,
 					(HiveOutputFormat<?, ?>) hiveOutputFormatClz.newInstance());
-			extension = extension == null ? "" : extension;
 			OutputFileConfig outputFileConfig = OutputFileConfig.builder()
-					.withPartSuffix(extension).build();
+					.withPartPrefix("part-" + UUID.randomUUID().toString())
+					.withPartSuffix(extension == null ? "" : extension)
+					.build();
 			if (isBounded) {
 				FileSystemOutputFormat.Builder<Row> builder = new FileSystemOutputFormat.Builder<>();
 				builder.setPartitionComputer(new HiveRowPartitionComputer(
@@ -156,7 +161,7 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 						partitionColumns));
 				builder.setDynamicGrouped(dynamicGrouping);
 				builder.setPartitionColumns(partitionColumns);
-				builder.setFileSystemFactory(new HadoopFileSystemFactory(jobConf));
+				builder.setFileSystemFactory(fsFactory);
 				builder.setFormatFactory(new HiveOutputFormatFactory(recordWriterFactory));
 				builder.setMetaStoreFactory(
 						msFactory);
@@ -183,25 +188,26 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 				TableRollingPolicy rollingPolicy = new TableRollingPolicy(
 						true,
 						conf.get(SINK_ROLLING_POLICY_FILE_SIZE).getBytes(),
-						conf.get(SINK_ROLLING_POLICY_TIME_INTERVAL).toMillis());
+						conf.get(SINK_ROLLING_POLICY_ROLLOVER_INTERVAL).toMillis());
 
-				Optional<BulkWriter.Factory<RowData>> bulkFactory = createBulkWriterFactory(partitionColumns, sd);
 				BucketsBuilder<RowData, String, ? extends BucketsBuilder<RowData, ?, ?>> builder;
-				if (userMrWriter || !bulkFactory.isPresent()) {
-					HiveBulkWriterFactory hadoopBulkFactory = new HiveBulkWriterFactory(recordWriterFactory);
-					builder = new HadoopPathBasedBulkFormatBuilder<>(
-							new Path(sd.getLocation()), hadoopBulkFactory, jobConf, assigner)
-							.withRollingPolicy(rollingPolicy)
-							.withOutputFileConfig(outputFileConfig);
+				if (userMrWriter) {
+					builder = bucketsBuilderForMRWriter(recordWriterFactory, sd, assigner, rollingPolicy, outputFileConfig);
 					LOG.info("Hive streaming sink: Use MapReduce RecordWriter writer.");
 				} else {
-					builder = StreamingFileSink.forBulkFormat(
-							new org.apache.flink.core.fs.Path(sd.getLocation()),
-							new FileSystemTableSink.ProjectionBulkFactory(bulkFactory.get(), partComputer))
-							.withBucketAssigner(assigner)
-							.withRollingPolicy(rollingPolicy)
-							.withOutputFileConfig(outputFileConfig);
-					LOG.info("Hive streaming sink: Use native parquet&orc writer.");
+					Optional<BulkWriter.Factory<RowData>> bulkFactory = createBulkWriterFactory(partitionColumns, sd);
+					if (bulkFactory.isPresent()) {
+						builder = StreamingFileSink.forBulkFormat(
+								new org.apache.flink.core.fs.Path(sd.getLocation()),
+								new FileSystemTableSink.ProjectionBulkFactory(bulkFactory.get(), partComputer))
+								.withBucketAssigner(assigner)
+								.withRollingPolicy(rollingPolicy)
+								.withOutputFileConfig(outputFileConfig);
+						LOG.info("Hive streaming sink: Use native parquet&orc writer.");
+					} else {
+						builder = bucketsBuilderForMRWriter(recordWriterFactory, sd, assigner, rollingPolicy, outputFileConfig);
+						LOG.info("Hive streaming sink: Use MapReduce RecordWriter writer because BulkWriter Factory not available.");
+					}
 				}
 				return FileSystemTableSink.createStreamingSink(
 						conf,
@@ -211,7 +217,9 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 						overwrite,
 						dataStream,
 						builder,
-						msFactory);
+						msFactory,
+						fsFactory,
+						conf.get(SINK_ROLLING_POLICY_CHECK_INTERVAL).toMillis());
 			}
 		} catch (TException e) {
 			throw new CatalogException("Failed to query Hive metaStore", e);
@@ -222,6 +230,19 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 		} catch (IllegalAccessException | InstantiationException e) {
 			throw new FlinkHiveException("Failed to instantiate output format instance", e);
 		}
+	}
+
+	private BucketsBuilder<RowData, String, ? extends BucketsBuilder<RowData, ?, ?>> bucketsBuilderForMRWriter(
+			HiveWriterFactory recordWriterFactory,
+			StorageDescriptor sd,
+			TableBucketAssigner assigner,
+			TableRollingPolicy rollingPolicy,
+			OutputFileConfig outputFileConfig) {
+		HiveBulkWriterFactory hadoopBulkFactory = new HiveBulkWriterFactory(recordWriterFactory);
+		return new HadoopPathBasedBulkFormatBuilder<>(
+				new Path(sd.getLocation()), hadoopBulkFactory, jobConf, assigner)
+				.withRollingPolicy(rollingPolicy)
+				.withOutputFileConfig(outputFileConfig);
 	}
 
 	private Optional<BulkWriter.Factory<RowData>> createBulkWriterFactory(String[] partitionColumns,
@@ -235,12 +256,14 @@ public class HiveTableSink implements AppendStreamTableSink, PartitionableTableS
 			formatTypes[i] = tableSchema.getFieldDataType(i).get().getLogicalType();
 		}
 		RowType formatType = RowType.of(formatTypes, formatNames);
-		Configuration formatConf = new Configuration(jobConf);
-		sd.getSerdeInfo().getParameters().forEach(formatConf::set);
 		if (serLib.contains("parquet")) {
+			Configuration formatConf = new Configuration(jobConf);
+			sd.getSerdeInfo().getParameters().forEach(formatConf::set);
 			return Optional.of(ParquetRowDataBuilder.createWriterFactory(
 					formatType, formatConf, hiveVersion.startsWith("3.")));
 		} else if (serLib.contains("orc")) {
+			Configuration formatConf = new ThreadLocalClassLoaderConfiguration(jobConf);
+			sd.getSerdeInfo().getParameters().forEach(formatConf::set);
 			TypeDescription typeDescription = OrcSplitReaderUtil.logicalTypeToOrcType(formatType);
 			return Optional.of(hiveShim.createOrcBulkWriterFactory(
 					formatConf, typeDescription.toString(), formatTypes));

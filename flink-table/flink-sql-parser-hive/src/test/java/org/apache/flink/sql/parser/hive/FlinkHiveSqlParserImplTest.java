@@ -53,6 +53,11 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 	}
 
 	@Test
+	public void testShowCurrentDatabase() {
+		sql("show current database").ok("SHOW CURRENT DATABASE");
+	}
+
+	@Test
 	public void testUseDatabase() {
 		// use database
 		sql("use db1").ok("USE `DB1`");
@@ -173,6 +178,10 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 						"  `P`  TIMESTAMP\n" +
 						")");
 		sql("create table tbl (v varchar)").fails("VARCHAR precision is mandatory");
+
+		sql("create table if not exists tbl (x int)").ok("CREATE TABLE IF NOT EXISTS `TBL` (\n"
+				+ "  `X`  INTEGER\n"
+				+ ")");
 		// TODO: support CLUSTERED BY, SKEWED BY, STORED BY, col constraints
 	}
 
@@ -256,6 +265,11 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 	}
 
 	@Test
+	public void testShowCurrentCatalog() {
+		sql("show current catalog").ok("SHOW CURRENT CATALOG");
+	}
+
+	@Test
 	public void testUseCatalog() {
 		sql("use catalog cat").ok("USE CATALOG `CAT`");
 	}
@@ -278,8 +292,7 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 						")");
 		sql("alter table tbl set serdeproperties('line.delim'='\n')")
 				.ok("ALTER TABLE `TBL` SET SERDEPROPERTIES (\n" +
-						"  'line.delim' = '\n" +
-						"'\n" +
+						"  'line.delim' = '\n'\n" +
 						")");
 	}
 
@@ -299,6 +312,15 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 				.ok("ALTER TABLE `TBL` PARTITION (`P` = 1)\n" +
 						"RENAME TO\n" +
 						"PARTITION (`P` = 2)");
+	}
+
+	@Test
+	public void testAlterTableProperties() {
+		sql("alter table tbl set tblproperties('k1'='v1','k2'='v2')")
+				.ok("ALTER TABLE `TBL` SET TBLPROPERTIES (\n" +
+						"  'k1' = 'v1',\n" +
+						"  'k2' = 'v2'\n" +
+						")");
 	}
 
 	// TODO: support EXCHANGE PARTITION, RECOVER PARTITIONS
@@ -409,5 +431,13 @@ public class FlinkHiveSqlParserImplTest extends SqlParserTest {
 						"PARTITION (`P1` = 'a', `P2` = 1)\n" +
 						"PARTITION (`P1` = 'b', `P2` = 2)");
 		// TODO: support IGNORE PROTECTION, PURGE
+	}
+
+	@Test
+	public void testShowPartitions() {
+		sql("show partitions tbl")
+			.ok("SHOW PARTITIONS `TBL`");
+		sql("show partitions tbl partition (p=1)")
+			.ok("SHOW PARTITIONS `TBL` PARTITION (`P` = 1)");
 	}
 }

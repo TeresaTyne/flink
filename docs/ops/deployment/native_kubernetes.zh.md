@@ -94,13 +94,13 @@ $ ./bin/kubernetes-session.sh \
 使用以下命令将 Flink 作业提交到 Kubernetes 集群。
 
 {% highlight bash %}
-$ ./bin/flink run -d -e kubernetes-session -Dkubernetes.cluster-id=<ClusterId> examples/streaming/WindowJoin.jar
+$ ./bin/flink run -d -t kubernetes-session -Dkubernetes.cluster-id=<ClusterId> examples/streaming/WindowJoin.jar
 {% endhighlight %}
 
 ### 访问 Job Manager UI
 
 有几种方法可以将服务暴露到外部（集群外部） IP 地址。
-可以使用 `kubernetes.service.exposed.type` 进行配置。
+可以使用 [`kubernetes.rest-service.exposed.type`]({% link ops/config.zh.md %}#kubernetes-rest-service-exposed-type) 进行配置。
 
 - `ClusterIP`：通过集群内部 IP 暴露服务。
 该服务只能在集群中访问。如果想访问 JobManager ui 或将作业提交到现有 session，则需要启动一个本地代理。
@@ -113,9 +113,11 @@ $ kubectl port-forward service/<ServiceName> 8081
 - `NodePort`：通过每个 Node 上的 IP 和静态端口（`NodePort`）暴露服务。`<NodeIP>:<NodePort>` 可以用来连接 JobManager 服务。`NodeIP` 可以很容易地用 Kubernetes ApiServer 地址替换。
 你可以在 kube 配置文件找到它。
 
-- `LoadBalancer`：默认值，使用云提供商的负载均衡器在外部暴露服务。
+- `LoadBalancer`：使用云提供商的负载均衡器在外部暴露服务。
 由于云提供商和 Kubernetes 需要一些时间来准备负载均衡器，因为你可能在客户端日志中获得一个 `NodePort` 的 JobManager Web 界面。
 你可以使用 `kubectl get services/<ClusterId>` 获取 EXTERNAL-IP 然后手动构建负载均衡器 JobManager Web 界面 `http://<EXTERNAL-IP>:8081`。
+
+  <span class="label label-warning">警告!</span> JobManager 可能会在无需认证的情况下暴露在公网上，同时可以提交任务运行。
 
 - `ExternalName`：将服务映射到 DNS 名称，当前版本不支持。
 
@@ -149,23 +151,10 @@ $ kubectl delete deployment/<ClusterID>
 
 ## 日志文件
 
-默认情况下，JobManager 和 TaskManager 只把日志存储在每个 pod 中的 `/opt/flink/log` 下。
-如果要使用 `kubectl logs <PodName>` 查看日志，必须执行以下操作：
+默认情况下，JobManager 和 TaskManager 会把日志同时输出到console和每个 pod 中的 `/opt/flink/log` 下。
+STDOUT 和 STDERR 只会输出到console。你可以使用 `kubectl logs <PodName>` 来访问它们。
 
-1. 在 Flink 客户端的 log4j.properties 中增加新的 appender。
-2. 在 log4j.properties 的 rootLogger 中增加如下 'appenderRef'，`rootLogger.appenderRef.console.ref = ConsoleAppender`。
-3. 通过增加配置项 `-Dkubernetes.container-start-command-template="%java% %classpath% %jvmmem% %jvmopts% %logging% %class% %args%"` 来删除重定向的参数。
-4. 停止并重启你的 session。现在你可以使用 `kubectl logs` 查看日志了。
-
-{% highlight bash %}
-# Log all infos to the console
-appender.console.name = ConsoleAppender
-appender.console.type = CONSOLE
-appender.console.layout.type = PatternLayout
-appender.console.layout.pattern = %d{yyyy-MM-dd HH:mm:ss,SSS} %-5p %-60c %x - %m%n
-{% endhighlight %}
-
-如果 pod 正在运行，可以使用 `kubectl exec -it <PodName> bash` 进入 pod 并查看日志或调试进程。
+如果 pod 正在运行，还可以使用 `kubectl exec -it <PodName> bash` 进入 pod 并查看日志或调试进程。
 
 ## Flink Kubernetes Application
 
@@ -218,7 +207,7 @@ $ ./bin/flink cancel -t kubernetes-application -Dkubernetes.cluster-id=<ClusterI
 ### 基于角色的访问控制
 
 基于角色的访问控制（[RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)）是一种在企业内部基于单个用户的角色来调节对计算或网络资源的访问的方法。
-用户可以配置 RBAC 角色和服务账户，Flink JobManager 使用这些角色和服务帐户访问 Kubernetes 集群中的 Kubernetes API server。
+用户可以配置 RBAC 角色和服务账户，JobManager 使用这些角色和服务帐户访问 Kubernetes 集群中的 Kubernetes API server。
 
 每个命名空间有默认的服务账户，但是`默认`服务账户可能没有权限在 Kubernetes 集群中创建或删除 pod。
 用户可能需要更新`默认`服务账户的权限或指定另一个绑定了正确角色的服务账户。
@@ -244,13 +233,13 @@ $ kubectl create clusterrolebinding flink-role-binding-flink --clusterrole=edit 
 <img src="{{ site.baseurl }}/fig/FlinkOnK8s.svg" class="img-responsive">
 
 创建 Flink Kubernetes session 集群时，Flink 客户端首先将连接到 Kubernetes ApiServer 提交集群描述信息，包括 ConfigMap 描述信息、Job Manager Service 描述信息、Job Manager Deployment 描述信息和 Owner Reference。
-Kubernetes 将创建 Flink master 的 deployment，在此期间 Kubelet 将拉取镜像，准备并挂载卷，然后执行 start 命令。
-master pod 启动后，Dispatcher 和 KubernetesResourceManager 服务会相继启动，然后集群准备完成，并等待提交作业。
+Kubernetes 将创建 JobManager 的 deployment，在此期间 Kubelet 将拉取镜像，准备并挂载卷，然后执行 start 命令。
+JobManager pod 启动后，Dispatcher 和 KubernetesResourceManager 服务会相继启动，然后集群准备完成，并等待提交作业。
 
 当用户通过 Flink 客户端提交作业时，将通过客户端生成 jobGraph 并将其与用户 jar 一起上传到 Dispatcher。
 然后 Dispatcher 会为每个 job 启动一个单独的 JobMaster。
 
-JobMaster 向 KubernetesResourceManager 请求被称为 slots 的资源。
+JobManager 向 KubernetesResourceManager 请求被称为 slots 的资源。
 如果没有可用的 slots，KubernetesResourceManager 将拉起 TaskManager pod 并且把它们注册到集群中。
 
 {% top %}

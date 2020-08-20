@@ -18,8 +18,9 @@
 
 package org.apache.flink.formats.json.canal;
 
+import org.apache.flink.formats.json.TimestampFormat;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.RowDataTypeInfo;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Collector;
 
@@ -64,8 +65,9 @@ public class CanalJsonDeserializationSchemaTest {
 		List<String> lines = readLines("canal-data.txt");
 		CanalJsonDeserializationSchema deserializationSchema = new CanalJsonDeserializationSchema(
 			SCHEMA,
-			new RowDataTypeInfo(SCHEMA),
-			false);
+			InternalTypeInfo.of(SCHEMA),
+			false,
+			TimestampFormat.ISO_8601);
 
 		SimpleCollector collector = new SimpleCollector();
 		for (String line : lines) {

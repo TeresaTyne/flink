@@ -18,6 +18,8 @@
 
 package org.apache.flink.kubernetes.kubeclient.decorators;
 
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.DeploymentOptionsInternal;
 import org.apache.flink.kubernetes.KubernetesTestUtils;
 import org.apache.flink.kubernetes.configuration.KubernetesConfigOptions;
 import org.apache.flink.kubernetes.kubeclient.FlinkPod;
@@ -42,9 +44,14 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.flink.configuration.GlobalConfiguration.FLINK_CONF_FILENAME;
+import static org.apache.flink.kubernetes.kubeclient.decorators.FlinkConfMountDecorator.getFlinkConfConfigMapName;
+import static org.apache.flink.kubernetes.utils.Constants.CONFIG_FILE_LOG4J_NAME;
+import static org.apache.flink.kubernetes.utils.Constants.CONFIG_FILE_LOGBACK_NAME;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThat;
 
 /**
  * General tests for the {@link FlinkConfMountDecorator}.
@@ -78,8 +85,8 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 
 	@Test
 	public void testConfigMap() throws IOException {
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "log4j.properties");
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "logback.xml");
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOG4J_NAME);
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOGBACK_NAME);
 
 		final List<HasMetadata> additionalResources = flinkConfMountDecorator.buildAccompanyingKubernetesResources();
 		assertEquals(1, additionalResources.size());
@@ -88,15 +95,20 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 
 		assertEquals(Constants.API_VERSION, resultConfigMap.getApiVersion());
 
-		assertEquals(flinkConfMountDecorator.getFlinkConfConfigMapName(CLUSTER_ID),
+		assertEquals(getFlinkConfConfigMapName(CLUSTER_ID),
 				resultConfigMap.getMetadata().getName());
 		assertEquals(getCommonLabels(), resultConfigMap.getMetadata().getLabels());
 
 		Map<String, String> resultDatas = resultConfigMap.getData();
-		assertEquals("some data", resultDatas.get("logback.xml"));
-		assertEquals("some data", resultDatas.get("log4j.properties"));
-		assertTrue(resultDatas.get(FLINK_CONF_FILENAME).contains(KubernetesConfigOptions.FLINK_CONF_DIR.key() +
-				": " + FLINK_CONF_DIR_IN_POD));
+		assertEquals("some data", resultDatas.get(CONFIG_FILE_LOGBACK_NAME));
+		assertEquals("some data", resultDatas.get(CONFIG_FILE_LOG4J_NAME));
+
+		final Configuration resultFlinkConfig = KubernetesTestUtils.loadConfigurationFromString(
+			resultDatas.get(FLINK_CONF_FILENAME));
+		assertThat(resultFlinkConfig.get(KubernetesConfigOptions.FLINK_CONF_DIR), is(FLINK_CONF_DIR_IN_POD));
+		// The following config options should not be added to config map
+		assertThat(resultFlinkConfig.get(KubernetesConfigOptions.KUBE_CONFIG_FILE), is(nullValue()));
+		assertThat(resultFlinkConfig.get(DeploymentOptionsInternal.CONF_DIR), is(nullValue()));
 	}
 
 	@Test
@@ -112,7 +124,7 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 			new VolumeBuilder()
 				.withName(Constants.FLINK_CONF_VOLUME)
 				.withNewConfigMap()
-					.withName(flinkConfMountDecorator.getFlinkConfConfigMapName(CLUSTER_ID))
+					.withName(getFlinkConfConfigMapName(CLUSTER_ID))
 					.withItems(expectedKeyToPaths)
 					.endConfigMap()
 				.build());
@@ -128,14 +140,14 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 
 	@Test
 	public void testDecoratedFlinkPodWithLog4j() throws IOException {
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "log4j.properties");
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOG4J_NAME);
 
 		final FlinkPod resultFlinkPod = flinkConfMountDecorator.decorateFlinkPod(baseFlinkPod);
 
 		final List<KeyToPath> expectedKeyToPaths = Arrays.asList(
 			new KeyToPathBuilder()
-				.withKey("log4j.properties")
-				.withPath("log4j.properties")
+				.withKey(CONFIG_FILE_LOG4J_NAME)
+				.withPath(CONFIG_FILE_LOG4J_NAME)
 				.build(),
 			new KeyToPathBuilder()
 				.withKey(FLINK_CONF_FILENAME)
@@ -145,7 +157,7 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 			new VolumeBuilder()
 				.withName(Constants.FLINK_CONF_VOLUME)
 				.withNewConfigMap()
-				.withName(flinkConfMountDecorator.getFlinkConfConfigMapName(CLUSTER_ID))
+				.withName(getFlinkConfConfigMapName(CLUSTER_ID))
 				.withItems(expectedKeyToPaths)
 				.endConfigMap()
 				.build());
@@ -154,14 +166,14 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 
 	@Test
 	public void testDecoratedFlinkPodWithLogback() throws IOException {
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "logback.xml");
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOGBACK_NAME);
 
 		final FlinkPod resultFlinkPod = flinkConfMountDecorator.decorateFlinkPod(baseFlinkPod);
 
 		final List<KeyToPath> expectedKeyToPaths = Arrays.asList(
 			new KeyToPathBuilder()
-				.withKey("logback.xml")
-				.withPath("logback.xml")
+				.withKey(CONFIG_FILE_LOGBACK_NAME)
+				.withPath(CONFIG_FILE_LOGBACK_NAME)
 				.build(),
 			new KeyToPathBuilder()
 				.withKey(FLINK_CONF_FILENAME)
@@ -171,7 +183,7 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 			new VolumeBuilder()
 				.withName(Constants.FLINK_CONF_VOLUME)
 				.withNewConfigMap()
-				.withName(flinkConfMountDecorator.getFlinkConfConfigMapName(CLUSTER_ID))
+				.withName(getFlinkConfConfigMapName(CLUSTER_ID))
 				.withItems(expectedKeyToPaths)
 				.endConfigMap()
 				.build());
@@ -180,19 +192,19 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 
 	@Test
 	public void testDecoratedFlinkPodWithLog4jAndLogback() throws IOException {
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "log4j.properties");
-		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, "logback.xml");
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOG4J_NAME);
+		KubernetesTestUtils.createTemporyFile("some data", flinkConfDir, CONFIG_FILE_LOGBACK_NAME);
 
 		final FlinkPod resultFlinkPod = flinkConfMountDecorator.decorateFlinkPod(baseFlinkPod);
 
 		final List<KeyToPath> expectedKeyToPaths = Arrays.asList(
 			new KeyToPathBuilder()
-				.withKey("logback.xml")
-				.withPath("logback.xml")
+				.withKey(CONFIG_FILE_LOGBACK_NAME)
+				.withPath(CONFIG_FILE_LOGBACK_NAME)
 				.build(),
 			new KeyToPathBuilder()
-				.withKey("log4j.properties")
-				.withPath("log4j.properties")
+				.withKey(CONFIG_FILE_LOG4J_NAME)
+				.withPath(CONFIG_FILE_LOG4J_NAME)
 				.build(),
 			new KeyToPathBuilder()
 				.withKey(FLINK_CONF_FILENAME)
@@ -202,7 +214,7 @@ public class FlinkConfMountDecoratorTest extends KubernetesJobManagerTestBase {
 			new VolumeBuilder()
 				.withName(Constants.FLINK_CONF_VOLUME)
 				.withNewConfigMap()
-				.withName(flinkConfMountDecorator.getFlinkConfConfigMapName(CLUSTER_ID))
+				.withName(getFlinkConfConfigMapName(CLUSTER_ID))
 				.withItems(expectedKeyToPaths)
 				.endConfigMap()
 				.build());

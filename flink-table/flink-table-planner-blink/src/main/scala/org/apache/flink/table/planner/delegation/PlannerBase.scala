@@ -55,12 +55,12 @@ import org.apache.calcite.rel.`type`.RelDataType
 import org.apache.calcite.tools.FrameworkConfig
 
 import java.util
-import java.util.function.{Supplier => JSupplier}
+import java.util.function.{Function => JFunction, Supplier => JSupplier}
 
 import _root_.scala.collection.JavaConversions._
 
 /**
-  * Implementation of [[Planner]] for legacy Flink planner. It supports only streaming use cases.
+  * Implementation of [[Planner]] for blink planner. It supports only streaming use cases.
   * (The new [[org.apache.flink.table.sources.InputFormatTableSource]] should work, but will be
   * handled as streaming sources, and no batch specific optimizations will be applied).
   *
@@ -89,17 +89,6 @@ abstract class PlannerBase(
       plannerContext.createSqlExprToRexConverter(tableRowType)
   }
 
-  @VisibleForTesting
-  private[flink] val plannerContext: PlannerContext =
-    new PlannerContext(
-      config,
-      functionCatalog,
-      catalogManager,
-      asRootSchema(new CatalogManagerCalciteSchema(
-        catalogManager, sqlExprToRexConverterFactory, isStreamingMode)),
-      getTraitDefs.toList
-    )
-
   private val parser: Parser = new ParserImpl(
     catalogManager,
     new JSupplier[FlinkPlannerImpl] {
@@ -110,8 +99,23 @@ abstract class PlannerBase(
     // parsing statements
     new JSupplier[CalciteParser] {
       override def get(): CalciteParser = plannerContext.createCalciteParser()
+    },
+    new JFunction[TableSchema, SqlExprToRexConverter] {
+      override def apply(t: TableSchema): SqlExprToRexConverter = {
+        sqlExprToRexConverterFactory.create(plannerContext.getTypeFactory.buildRelNodeRowType(t))
+      }
     }
   )
+
+  @VisibleForTesting
+  private[flink] val plannerContext: PlannerContext =
+    new PlannerContext(
+      config,
+      functionCatalog,
+      catalogManager,
+      asRootSchema(new CatalogManagerCalciteSchema(catalogManager, isStreamingMode)),
+      getTraitDefs.toList
+    )
 
   /** Returns the [[FlinkRelBuilder]] of this TableEnvironment. */
   private[flink] def getRelBuilder: FlinkRelBuilder = {

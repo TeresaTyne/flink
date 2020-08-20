@@ -25,6 +25,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.ScalarFunction;
 import org.apache.flink.table.functions.ScalarFunctionDefinition;
 import org.apache.flink.table.functions.hive.HiveSimpleUDF;
+import org.apache.flink.table.module.CoreModule;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
 
@@ -62,22 +63,22 @@ public class HiveModuleTest {
 
 		switch (hiveVersion) {
 			case HIVE_VERSION_V1_2_0:
-				assertEquals(232, hiveModule.listFunctions().size());
+				assertEquals(229, hiveModule.listFunctions().size());
 				break;
 			case HIVE_VERSION_V2_0_0:
-				assertEquals(236, hiveModule.listFunctions().size());
+				assertEquals(233, hiveModule.listFunctions().size());
 				break;
 			case HIVE_VERSION_V2_1_1:
-				assertEquals(246, hiveModule.listFunctions().size());
+				assertEquals(243, hiveModule.listFunctions().size());
 				break;
 			case HIVE_VERSION_V2_2_0:
-				assertEquals(262, hiveModule.listFunctions().size());
+				assertEquals(259, hiveModule.listFunctions().size());
 				break;
 			case HIVE_VERSION_V2_3_4:
-				assertEquals(280, hiveModule.listFunctions().size());
+				assertEquals(277, hiveModule.listFunctions().size());
 				break;
 			case HIVE_VERSION_V3_1_1:
-				assertEquals(299, hiveModule.listFunctions().size());
+				assertEquals(296, hiveModule.listFunctions().size());
 				break;
 		}
 	}
@@ -167,5 +168,37 @@ public class HiveModuleTest {
 				tableEnv.sqlQuery("select str_to_map('a:1,b:2,c:3',',',':')").execute().collect());
 
 		assertEquals("[{a=1, b=2, c=3}]", results.toString());
+	}
+
+	@Test
+	public void testEmptyStringLiteralParameters() {
+		TableEnvironment tableEnv = HiveTestUtils.createTableEnvWithBlinkPlannerBatchMode();
+
+		tableEnv.unloadModule("core");
+		tableEnv.loadModule("hive", new HiveModule());
+
+		// UDF
+		List<Row> results = Lists.newArrayList(
+				tableEnv.sqlQuery("select regexp_replace('foobar','oo|ar','')").execute().collect());
+		assertEquals("[fb]", results.toString());
+
+		// GenericUDF
+		results = Lists.newArrayList(tableEnv.sqlQuery("select length('')").execute().collect());
+		assertEquals("[0]", results.toString());
+	}
+
+	@Test
+	public void testFunctionsNeedSessionState() {
+		TableEnvironment tableEnv = HiveTestUtils.createTableEnvWithBlinkPlannerBatchMode();
+
+		tableEnv.unloadModule("core");
+		tableEnv.loadModule("hive", new HiveModule());
+		tableEnv.loadModule("core", CoreModule.INSTANCE);
+
+		tableEnv.sqlQuery("select current_timestamp,current_date").execute().collect();
+
+		List<Row> results = Lists.newArrayList(
+				tableEnv.sqlQuery("select mod(-1,2),pmod(-1,2)").execute().collect());
+		assertEquals("[-1,1]", results.toString());
 	}
 }
