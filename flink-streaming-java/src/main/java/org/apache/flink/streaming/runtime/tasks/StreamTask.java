@@ -89,7 +89,6 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -1144,8 +1143,7 @@ public abstract class StreamTask<OUT, OP extends StreamOperator<OUT>>
 			StreamConfig configuration,
 			Environment environment) {
 		List<RecordWriter<SerializationDelegate<StreamRecord<OUT>>>> recordWriters = new ArrayList<>();
-		List<StreamEdge> outEdgesInOrder = configuration.getOutEdgesInOrder(environment.getUserClassLoader());
-		Map<Integer, StreamConfig> chainedConfigs = configuration.getTransitiveChainedTaskConfigsWithSelf(environment.getUserClassLoader());
+		List<StreamEdge> outEdgesInOrder = configuration.getOutEdgesInOrder(environment.getUserCodeClassLoader().asClassLoader());
 
 		for (int i = 0; i < outEdgesInOrder.size(); i++) {
 			StreamEdge edge = outEdgesInOrder.get(i);
@@ -1155,7 +1153,7 @@ public abstract class StreamTask<OUT, OP extends StreamOperator<OUT>>
 					i,
 					environment,
 					environment.getTaskInfo().getTaskName(),
-					chainedConfigs.get(edge.getSourceId()).getBufferTimeout()));
+					edge.getBufferTimeout()));
 		}
 		return recordWriters;
 	}
@@ -1175,7 +1173,7 @@ public abstract class StreamTask<OUT, OP extends StreamOperator<OUT>>
 		try {
 			outputPartitioner = InstantiationUtil.clone(
 				(StreamPartitioner<OUT>) edge.getPartitioner(),
-				environment.getUserClassLoader());
+				environment.getUserCodeClassLoader().asClassLoader());
 		} catch (Exception e) {
 			ExceptionUtils.rethrow(e);
 		}

@@ -49,7 +49,6 @@ public class StreamConfigChainer<OWNER> {
 	private final OWNER owner;
 	private final StreamConfig headConfig;
 	private final Map<Integer, StreamConfig> chainedConfigs = new HashMap<>();
-	private final long bufferTimeout;
 
 	private StreamConfig tailConfig;
 	private int chainIndex = MAIN_NODE_ID;
@@ -58,7 +57,6 @@ public class StreamConfigChainer<OWNER> {
 		this.owner = checkNotNull(owner);
 		this.headConfig = checkNotNull(headConfig);
 		this.tailConfig = checkNotNull(headConfig);
-		this.bufferTimeout = headConfig.getBufferTimeout();
 
 		head(headOperatorID);
 	}
@@ -67,7 +65,6 @@ public class StreamConfigChainer<OWNER> {
 		headConfig.setOperatorID(headOperatorID);
 		headConfig.setChainStart();
 		headConfig.setChainIndex(chainIndex);
-		headConfig.setBufferTimeout(bufferTimeout);
 	}
 
 	public <T> StreamConfigChainer<OWNER> chain(
@@ -129,10 +126,9 @@ public class StreamConfigChainer<OWNER> {
 
 		tailConfig.setChainedOutputs(Collections.singletonList(
 			new StreamEdge(
-				new StreamNode(tailConfig.getChainIndex(), null, null, (StreamOperator<?>) null, null, null, null),
-				new StreamNode(chainIndex, null, null, (StreamOperator<?>) null, null, null, null),
+				new StreamNode(tailConfig.getChainIndex(), null, null, (StreamOperator<?>) null, null, null),
+				new StreamNode(chainIndex, null, null, (StreamOperator<?>) null, null, null),
 				0,
-				Collections.<String>emptyList(),
 				null,
 				null)));
 		tailConfig = new StreamConfig(new Configuration());
@@ -145,7 +141,6 @@ public class StreamConfigChainer<OWNER> {
 			tailConfig.setStateKeySerializer(inputSerializer);
 		}
 		tailConfig.setChainIndex(chainIndex);
-		tailConfig.setBufferTimeout(bufferTimeout);
 
 		chainedConfigs.put(chainIndex, tailConfig);
 
@@ -157,15 +152,13 @@ public class StreamConfigChainer<OWNER> {
 		List<StreamEdge> outEdgesInOrder = new LinkedList<StreamEdge>();
 		outEdgesInOrder.add(
 			new StreamEdge(
-				new StreamNode(chainIndex, null, null, (StreamOperator<?>) null, null, null, null),
-				new StreamNode(chainIndex , null, null, (StreamOperator<?>) null, null, null, null),
+				new StreamNode(chainIndex, null, null, (StreamOperator<?>) null, null, null),
+				new StreamNode(chainIndex , null, null, (StreamOperator<?>) null, null, null),
 				0,
-				Collections.<String>emptyList(),
 				new BroadcastPartitioner<Object>(),
 				null));
 
 		tailConfig.setChainEnd();
-		tailConfig.setOutputSelectors(Collections.emptyList());
 		tailConfig.setNumberOfOutputs(1);
 		tailConfig.setOutEdgesInOrder(outEdgesInOrder);
 		tailConfig.setNonChainedOutputs(outEdgesInOrder);
@@ -190,7 +183,6 @@ public class StreamConfigChainer<OWNER> {
 			null,
 			dummyOperator,
 			"source dummy",
-			new LinkedList<>(),
 			SourceStreamTask.class);
 		StreamNode targetVertexDummy = new StreamNode(
 			MAIN_NODE_ID + 1,
@@ -198,14 +190,12 @@ public class StreamConfigChainer<OWNER> {
 			null,
 			dummyOperator,
 			"target dummy",
-			new LinkedList<>(),
 			SourceStreamTask.class);
 
 		outEdgesInOrder.add(new StreamEdge(
 			sourceVertexDummy,
 			targetVertexDummy,
 			0,
-			new LinkedList<>(),
 			new BroadcastPartitioner<>(),
 			null));
 
