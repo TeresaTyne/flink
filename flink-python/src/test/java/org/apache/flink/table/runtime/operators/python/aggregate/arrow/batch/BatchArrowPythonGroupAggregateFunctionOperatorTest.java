@@ -21,14 +21,12 @@ package org.apache.flink.table.runtime.operators.python.aggregate.arrow.batch;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.python.PythonFunctionRunner;
 import org.apache.flink.python.PythonOptions;
-import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.python.PythonFunctionInfo;
 import org.apache.flink.table.runtime.operators.python.aggregate.arrow.AbstractArrowPythonAggregateFunctionOperator;
-import org.apache.flink.table.runtime.operators.python.aggregate.arrow.ArrowPythonAggregateFunctionOperatorTestBase;
 import org.apache.flink.table.runtime.utils.PassThroughPythonAggregateFunctionRunner;
 import org.apache.flink.table.runtime.utils.PythonTestUtils;
 import org.apache.flink.table.types.logical.BigIntType;
@@ -46,12 +44,12 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Test for {@link BatchArrowPythonGroupAggregateFunctionOperator}. These test that:
  *
  * <ul>
- * <li>FinishBundle is called when checkpoint is encountered</li>
- * <li>Watermarks are buffered and only sent to downstream when finishedBundle is triggered</li>
+ * 		<li>FinishBundle is called when bundled element count reach to max bundle size</li>
+ * 		<li>FinishBundle is called when bundled time reach to max bundle time</li>
  * </ul>
  */
 public class BatchArrowPythonGroupAggregateFunctionOperatorTest
-	extends ArrowPythonAggregateFunctionOperatorTestBase {
+	extends AbstractBatchArrowPythonAggregateFunctionOperatorTest {
 
 	@Test
 	public void testGroupAggregateFunction() throws Exception {
@@ -68,34 +66,6 @@ public class BatchArrowPythonGroupAggregateFunctionOperatorTest
 		testHarness.close();
 
 		expectedOutput.add(new StreamRecord<>(newRow(true, "c1", 0L)));
-		expectedOutput.add(new StreamRecord<>(newRow(true, "c2", 2L)));
-
-		assertOutputEquals("Output was not correct.", expectedOutput, testHarness.getOutput());
-	}
-
-	@Test
-	public void testFinishBundleTriggeredOnCheckpoint() throws Exception {
-		Configuration conf = new Configuration();
-		conf.setInteger(PythonOptions.MAX_BUNDLE_SIZE, 10);
-		OneInputStreamOperatorTestHarness<RowData, RowData> testHarness = getTestHarness(conf);
-
-		long initialTime = 0L;
-		ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
-
-		testHarness.open();
-
-		testHarness.processElement(new StreamRecord<>(newRow(true, "c1", "c2", 0L), initialTime + 1));
-		testHarness.processElement(new StreamRecord<>(newRow(true, "c1", "c4", 1L), initialTime + 2));
-		testHarness.processElement(new StreamRecord<>(newRow(true, "c2", "c6", 2L), initialTime + 3));
-		// checkpoint trigger finishBundle
-		testHarness.prepareSnapshotPreBarrier(0L);
-
-		expectedOutput.add(new StreamRecord<>(newRow(true, "c1", 0L)));
-
-		assertOutputEquals("Output was not correct.", expectedOutput, testHarness.getOutput());
-
-		testHarness.close();
-
 		expectedOutput.add(new StreamRecord<>(newRow(true, "c2", 2L)));
 
 		assertOutputEquals("Output was not correct.", expectedOutput, testHarness.getOutput());
@@ -154,32 +124,6 @@ public class BatchArrowPythonGroupAggregateFunctionOperatorTest
 		expectedOutput.add(new StreamRecord<>(newRow(true, "c2", 2L)));
 
 		assertOutputEquals("Output was not correct.", expectedOutput, testHarness.getOutput());
-	}
-
-	@Test
-	public void testWatermarkProcessedOnFinishBundle() throws Exception {
-		Configuration conf = new Configuration();
-		conf.setInteger(PythonOptions.MAX_BUNDLE_SIZE, 10);
-		OneInputStreamOperatorTestHarness<RowData, RowData> testHarness = getTestHarness(conf);
-		long initialTime = 0L;
-		ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
-
-		testHarness.open();
-
-		testHarness.processElement(new StreamRecord<>(newRow(true, "c1", "c2", 0L), initialTime + 1));
-		testHarness.processElement(new StreamRecord<>(newRow(true, "c2", "c6", 2L), initialTime + 2));
-		testHarness.processWatermark(initialTime + 2);
-		assertOutputEquals("Watermark has been processed", expectedOutput, testHarness.getOutput());
-
-		// checkpoint trigger finishBundle
-		testHarness.prepareSnapshotPreBarrier(0L);
-
-		expectedOutput.add(new StreamRecord<>(newRow(true, "c1", 0L)));
-		expectedOutput.add(new Watermark(initialTime + 2));
-
-		assertOutputEquals("Output was not correct.", expectedOutput, testHarness.getOutput());
-
-		testHarness.close();
 	}
 
 	@Override
@@ -248,7 +192,8 @@ public class BatchArrowPythonGroupAggregateFunctionOperatorTest
 				getUserDefinedFunctionsProto(),
 				getInputOutputCoderUrn(),
 				new HashMap<>(),
-				PythonTestUtils.createMockFlinkMetricContainer()
+				PythonTestUtils.createMockFlinkMetricContainer(),
+				false
 			);
 		}
 	}
