@@ -142,7 +142,12 @@ public final class StreamTaskNetworkInput<T> implements StreamTaskInput<T> {
 		while (true) {
 			// get the stream element from the deserializer
 			if (currentRecordDeserializer != null) {
-				DeserializationResult result = currentRecordDeserializer.getNextRecord(deserializationDelegate);
+				DeserializationResult result;
+				try {
+					result = currentRecordDeserializer.getNextRecord(deserializationDelegate);
+				} catch (IOException e) {
+					throw new IOException(String.format("Can't get next record for channel %d", lastChannel), e);
+				}
 				if (result.isBufferConsumed()) {
 					currentRecordDeserializer.getCurrentBuffer().recycleBuffer();
 					currentRecordDeserializer = null;
@@ -178,11 +183,11 @@ public final class StreamTaskNetworkInput<T> implements StreamTaskInput<T> {
 		if (recordOrMark.isRecord()){
 			output.emitRecord(recordOrMark.asRecord());
 		} else if (recordOrMark.isWatermark()) {
-			statusWatermarkValve.inputWatermark(recordOrMark.asWatermark(), lastChannel);
+			statusWatermarkValve.inputWatermark(recordOrMark.asWatermark(), lastChannel, output);
 		} else if (recordOrMark.isLatencyMarker()) {
 			output.emitLatencyMarker(recordOrMark.asLatencyMarker());
 		} else if (recordOrMark.isStreamStatus()) {
-			statusWatermarkValve.inputStreamStatus(recordOrMark.asStreamStatus(), lastChannel);
+			statusWatermarkValve.inputStreamStatus(recordOrMark.asStreamStatus(), lastChannel, output);
 		} else {
 			throw new UnsupportedOperationException("Unknown type of StreamElement");
 		}

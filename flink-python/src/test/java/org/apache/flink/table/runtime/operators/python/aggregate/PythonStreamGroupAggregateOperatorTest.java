@@ -21,48 +21,33 @@ package org.apache.flink.table.runtime.operators.python.aggregate;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
-import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.python.PythonFunctionRunner;
 import org.apache.flink.python.PythonOptions;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
-import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
-import org.apache.flink.table.functions.python.PythonFunctionInfo;
-import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
+import org.apache.flink.table.functions.python.PythonAggregateFunctionInfo;
+import org.apache.flink.table.planner.typeutils.DataViewUtils;
 import org.apache.flink.table.runtime.operators.python.scalar.PythonScalarFunctionOperatorTestBase;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
-import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
-import org.apache.flink.table.runtime.util.RowDataHarnessAssertor;
 import org.apache.flink.table.runtime.utils.PassThroughStreamAggregatePythonFunctionRunner;
 import org.apache.flink.table.runtime.utils.PythonTestUtils;
-import org.apache.flink.table.types.logical.BigIntType;
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.VarCharType;
-import org.apache.flink.types.RowKind;
 
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Function;
 
-import static org.apache.flink.table.runtime.util.StreamRecordUtils.row;
-
 /**
  * The tests for {@link PythonStreamGroupAggregateOperator}.
  */
-public class PythonStreamGroupAggregateOperatorTest {
+public class PythonStreamGroupAggregateOperatorTest extends AbstractPythonStreamAggregateOperatorTest {
 
 	@Test
 	public void testFlushDataOnClose() throws Exception {
@@ -216,46 +201,22 @@ public class PythonStreamGroupAggregateOperatorTest {
 		testHarness.close();
 	}
 
-	private LogicalType[] getOutputLogicalType() {
-		return new LogicalType[]{
-			DataTypes.STRING().getLogicalType(),
-			DataTypes.BIGINT().getLogicalType()
-		};
-	}
-
-	private RowType getInputType() {
-		return new RowType(Arrays.asList(
-			new RowType.RowField("f1", new VarCharType()),
-			new RowType.RowField("f2", new BigIntType())));
-	}
-
-	private RowType getOutputType() {
-		return new RowType(Arrays.asList(
-			new RowType.RowField("f1", new VarCharType()),
-			new RowType.RowField("f2", new BigIntType())));
-	}
-
-	private RowType getKeyType() {
-		return new RowType(Collections.singletonList(
-			new RowType.RowField("f1", new VarCharType())));
-	}
-
-	private int[] getGrouping() {
-		return new int[]{0};
-	}
-
-	private OneInputStreamOperator getTestOperator(Configuration config) {
+	@Override
+	public OneInputStreamOperator getTestOperator(Configuration config) {
 		long stateTtl = Long.valueOf(config.getString("table.exec.state.ttl", "0"));
 		return new PassThroughPythonStreamGroupAggregateOperator(
 			config,
 			getInputType(),
 			getOutputType(),
-			new PythonFunctionInfo[]{
-				new PythonFunctionInfo(
+			new PythonAggregateFunctionInfo[]{
+				new PythonAggregateFunctionInfo(
 					PythonScalarFunctionOperatorTestBase.DummyPythonFunction.INSTANCE,
-					new Integer[]{0})},
+					new Integer[]{0},
+					-1,
+					false)},
 			getGrouping(),
 			-1,
+			false,
 			false,
 			stateTtl,
 			stateTtl);
@@ -268,9 +229,10 @@ public class PythonStreamGroupAggregateOperatorTest {
 			Configuration config,
 			RowType inputType,
 			RowType outputType,
-			PythonFunctionInfo[] aggregateFunctions,
+			PythonAggregateFunctionInfo[] aggregateFunctions,
 			int[] grouping,
 			int indexOfCountStar,
+			boolean countStarInserted,
 			boolean generateUpdateBefore,
 			long minRetentionTime,
 			long maxRetentionTime) {
@@ -279,8 +241,10 @@ public class PythonStreamGroupAggregateOperatorTest {
 				inputType,
 				outputType,
 				aggregateFunctions,
+				new DataViewUtils.DataViewSpec[0][0],
 				grouping,
 				indexOfCountStar,
+				countStarInserted,
 				generateUpdateBefore,
 				minRetentionTime,
 				maxRetentionTime);
@@ -324,39 +288,5 @@ public class PythonStreamGroupAggregateOperatorTest {
 				}
 			};
 		}
-	}
-
-	private RowDataHarnessAssertor assertor = new RowDataHarnessAssertor(getOutputLogicalType());
-
-	private OneInputStreamOperatorTestHarness getTestHarness(
-		Configuration config) throws Exception {
-		RowType outputType = getOutputType();
-		OneInputStreamOperator operator = getTestOperator(config);
-
-		KeyedOneInputStreamOperatorTestHarness testHarness =
-			new KeyedOneInputStreamOperatorTestHarness(
-				operator,
-				KeySelectorUtil.getRowDataSelector(getGrouping(), InternalTypeInfo.of(getInputType())),
-				InternalTypeInfo.of(getKeyType()),
-				1,
-				1,
-				0);
-		testHarness.getStreamConfig().setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.BATCH_OP, 0.5);
-		testHarness.setup(new RowDataSerializer(outputType));
-		return testHarness;
-	}
-
-	private RowData newRow(boolean accumulateMsg, Object... fields) {
-		if (accumulateMsg) {
-			return row(fields);
-		} else {
-			RowData row = row(fields);
-			row.setRowKind(RowKind.DELETE);
-			return row;
-		}
-	}
-
-	protected void assertOutputEquals(String message, Collection<Object> expected, Collection<Object> actual) {
-		assertor.assertOutputEquals(message, expected, actual);
 	}
 }

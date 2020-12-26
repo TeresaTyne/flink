@@ -29,21 +29,25 @@ import org.apache.flink.runtime.io.network.partition.NoOpJobMasterPartitionTrack
 import org.apache.flink.runtime.io.network.partition.PartitionTrackerFactory;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobmanager.OnCompletionActions;
-import org.apache.flink.runtime.jobmaster.ExecutionDeploymentReconciler;
 import org.apache.flink.runtime.jobmaster.DefaultExecutionDeploymentReconciler;
-import org.apache.flink.runtime.jobmaster.ExecutionDeploymentTracker;
 import org.apache.flink.runtime.jobmaster.DefaultExecutionDeploymentTracker;
+import org.apache.flink.runtime.jobmaster.ExecutionDeploymentReconciler;
+import org.apache.flink.runtime.jobmaster.ExecutionDeploymentTracker;
 import org.apache.flink.runtime.jobmaster.JobManagerSharedServices;
 import org.apache.flink.runtime.jobmaster.JobMaster;
 import org.apache.flink.runtime.jobmaster.JobMasterConfiguration;
+import org.apache.flink.runtime.jobmaster.JobMasterId;
 import org.apache.flink.runtime.jobmaster.TestingJobManagerSharedServicesBuilder;
 import org.apache.flink.runtime.jobmaster.factories.UnregisteredJobManagerJobMetricGroupFactory;
 import org.apache.flink.runtime.jobmaster.slotpool.SlotPoolFactory;
 import org.apache.flink.runtime.leaderretrieval.SettableLeaderRetrievalService;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.runtime.scheduler.SchedulerNGFactory;
 import org.apache.flink.runtime.shuffle.NettyShuffleMaster;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
+
+import javax.annotation.Nullable;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -61,6 +65,8 @@ public class JobMasterBuilder {
 	private final JobGraph jobGraph;
 	private final RpcService rpcService;
 
+	private JobMasterId jobMasterId = JobMasterId.generate();
+
 	private HighAvailabilityServices highAvailabilityServices;
 
 	private JobManagerSharedServices jobManagerSharedServices = new TestingJobManagerSharedServicesBuilder().build();
@@ -76,6 +82,9 @@ public class JobMasterBuilder {
 	private PartitionTrackerFactory partitionTrackerFactory = NoOpJobMasterPartitionTracker.FACTORY;
 
 	private ResourceID jmResourceId = ResourceID.generate();
+
+	@Nullable
+	private SchedulerNGFactory schedulerFactory = null;
 
 	private FatalErrorHandler fatalErrorHandler = error -> {
 	};
@@ -157,11 +166,22 @@ public class JobMasterBuilder {
 		return this;
 	}
 
+	public JobMasterBuilder withSchedulerFactory(SchedulerNGFactory schedulerFactory) {
+		this.schedulerFactory = schedulerFactory;
+		return this;
+	}
+
+	public JobMasterBuilder withJobMasterId(JobMasterId jobMasterId) {
+		this.jobMasterId = jobMasterId;
+		return this;
+	}
+
 	public JobMaster createJobMaster() throws Exception {
 		final JobMasterConfiguration jobMasterConfiguration = JobMasterConfiguration.fromConfiguration(configuration);
 
 		return new JobMaster(
 			rpcService,
+			jobMasterId,
 			jobMasterConfiguration,
 			jmResourceId,
 			jobGraph,
@@ -173,7 +193,7 @@ public class JobMasterBuilder {
 			onCompletionActions,
 			fatalErrorHandler,
 			JobMasterBuilder.class.getClassLoader(),
-			SchedulerNGFactoryFactory.createSchedulerNGFactory(configuration),
+			schedulerFactory != null ? schedulerFactory : SchedulerNGFactoryFactory.createSchedulerNGFactory(configuration),
 			shuffleMaster,
 			partitionTrackerFactory,
 			executionDeploymentTracker,
@@ -214,8 +234,8 @@ public class JobMasterBuilder {
 			return jobReachedGloballyTerminalStateFuture;
 		}
 
-		public CompletableFuture<ArchivedExecutionGraph> getJobMasterFailedFuture() {
-			return jobReachedGloballyTerminalStateFuture;
+		public CompletableFuture<Throwable> getJobMasterFailedFuture() {
+			return jobMasterFailedFuture;
 		}
 	}
 }

@@ -18,21 +18,18 @@
 
 package org.apache.flink.table.planner.plan.nodes.physical.batch
 
-import java.util
-
-import org.apache.flink.runtime.operators.DamBehavior
 import org.apache.flink.table.data.RowData
 import org.apache.flink.table.functions.UserDefinedFunction
 import org.apache.flink.table.planner.CalcitePair
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
-import org.apache.flink.table.planner.delegation.BatchPlanner
 import org.apache.flink.table.planner.plan.`trait`.{FlinkRelDistribution, FlinkRelDistributionTraitDef}
 import org.apache.flink.table.planner.plan.cost.{FlinkCost, FlinkCostFactory}
-import org.apache.flink.table.planner.plan.nodes.exec.{BatchExecNode, ExecNode}
+import org.apache.flink.table.planner.plan.nodes.exec.{LegacyBatchExecNode, ExecEdge}
 import org.apache.flink.table.planner.plan.nodes.physical.batch.OverWindowMode.OverWindowMode
 import org.apache.flink.table.planner.plan.rules.physical.batch.BatchExecJoinRuleBase
 import org.apache.flink.table.planner.plan.utils.{FlinkRelOptUtil, OverAggregateUtil, RelExplainUtil}
 
+import com.google.common.collect.ImmutableList
 import org.apache.calcite.plan._
 import org.apache.calcite.rel.RelDistribution.Type._
 import org.apache.calcite.rel._
@@ -45,7 +42,7 @@ import org.apache.calcite.sql.fun.SqlLeadLagAggFunction
 import org.apache.calcite.tools.RelBuilder
 import org.apache.calcite.util.ImmutableIntList
 
-import com.google.common.collect.ImmutableList
+import java.util
 
 import scala.collection.JavaConversions._
 import scala.collection.mutable.ArrayBuffer
@@ -69,7 +66,7 @@ abstract class BatchExecOverAggregateBase(
     logicWindow: Window)
   extends SingleRel(cluster, traitSet, inputRel)
   with BatchPhysicalRel
-  with BatchExecNode[RowData] {
+  with LegacyBatchExecNode[RowData] {
 
   protected lazy val modeToGroupToAggCallToAggFunction:
     Seq[(OverWindowMode, Window.Group, Seq[(AggregateCall, UserDefinedFunction)])] =
@@ -315,16 +312,7 @@ abstract class BatchExecOverAggregateBase(
 
   //~ ExecNode methods -----------------------------------------------------------
 
-  override def getDamBehavior = DamBehavior.PIPELINED
-
-  override def getInputNodes: util.List[ExecNode[BatchPlanner, _]] =
-    List(getInput.asInstanceOf[ExecNode[BatchPlanner, _]])
-
-  override def replaceInputNode(
-      ordinalInParent: Int,
-      newInputNode: ExecNode[BatchPlanner, _]): Unit = {
-    replaceInput(ordinalInParent, newInputNode.asInstanceOf[RelNode])
-  }
+  override def getInputEdges: util.List[ExecEdge] = List(ExecEdge.DEFAULT)
 }
 
 object OverWindowMode extends Enumeration {

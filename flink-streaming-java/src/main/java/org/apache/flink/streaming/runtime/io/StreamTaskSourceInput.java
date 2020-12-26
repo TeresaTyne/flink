@@ -26,8 +26,8 @@ import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.runtime.io.network.partition.consumer.CheckpointableInput;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.operators.SourceOperator;
-import org.apache.flink.util.IOUtils;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -40,18 +40,20 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * unavailable or finished.
  */
 @Internal
-public final class StreamTaskSourceInput<T> implements StreamTaskInput<T>, CheckpointableInput {
+public class StreamTaskSourceInput<T> implements StreamTaskInput<T>, CheckpointableInput {
 
 	private final SourceOperator<T, ?> operator;
 	private final int inputGateIndex;
 	private final AvailabilityHelper isBlockedAvailability = new AvailabilityHelper();
 	private final List<InputChannelInfo> inputChannelInfos;
+	private final int inputIndex;
 
-	public StreamTaskSourceInput(SourceOperator<T, ?> operator, int inputGateIndex) {
+	public StreamTaskSourceInput(SourceOperator<T, ?> operator, int inputGateIndex, int inputIndex) {
 		this.operator = checkNotNull(operator);
 		this.inputGateIndex = inputGateIndex;
 		inputChannelInfos = Collections.singletonList(new InputChannelInfo(inputGateIndex, 0));
 		isBlockedAvailability.resetAvailable();
+		this.inputIndex = inputIndex;
 	}
 
 	@Override
@@ -72,12 +74,12 @@ public final class StreamTaskSourceInput<T> implements StreamTaskInput<T>, Check
 	}
 
 	@Override
-	public void blockConsumption(int channelIndex) {
+	public void blockConsumption(InputChannelInfo channelInfo) {
 		isBlockedAvailability.resetUnavailable();
 	}
 
 	@Override
-	public void resumeConsumption(int channelIndex) {
+	public void resumeConsumption(InputChannelInfo channelInfo) {
 		isBlockedAvailability.getUnavailableToResetAvailable().complete(null);
 	}
 
@@ -113,12 +115,12 @@ public final class StreamTaskSourceInput<T> implements StreamTaskInput<T>, Check
 	 */
 	@Override
 	public void checkpointStarted(CheckpointBarrier barrier) {
-		blockConsumption(-1);
+		blockConsumption(null);
 	}
 
 	@Override
 	public void checkpointStopped(long cancelledCheckpointId) {
-		resumeConsumption(-1);
+		resumeConsumption(null);
 	}
 
 	@Override
@@ -126,17 +128,18 @@ public final class StreamTaskSourceInput<T> implements StreamTaskInput<T>, Check
 		return inputGateIndex;
 	}
 
-	/**
-	 * This method is invalid and never called by the one/source input processor.
-	 */
+	@Override
+	public void convertToPriorityEvent(int channelIndex, int sequenceNumber) throws IOException {
+	}
+
 	@Override
 	public int getInputIndex() {
-		throw new UnsupportedOperationException();
+		return inputIndex;
 	}
 
 	@Override
 	public void close() {
-		IOUtils.closeQuietly(operator::close);
+		// SourceOperator is closed via OperatorChain
 	}
 
 	@Override

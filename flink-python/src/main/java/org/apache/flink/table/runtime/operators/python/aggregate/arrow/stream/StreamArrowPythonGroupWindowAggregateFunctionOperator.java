@@ -33,12 +33,12 @@ import org.apache.flink.streaming.api.operators.InternalTimer;
 import org.apache.flink.streaming.api.operators.InternalTimerService;
 import org.apache.flink.streaming.api.operators.Triggerable;
 import org.apache.flink.table.data.GenericRowData;
-import org.apache.flink.table.data.JoinedRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.data.binary.BinaryRowDataUtil;
 import org.apache.flink.table.data.util.RowDataUtil;
+import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.functions.AggregateFunction;
 import org.apache.flink.table.functions.python.PythonFunctionInfo;
 import org.apache.flink.table.runtime.operators.python.aggregate.arrow.AbstractArrowPythonAggregateFunctionOperator;
@@ -380,8 +380,10 @@ public class StreamArrowPythonGroupWindowAggregateFunctionOperator<K, W extends 
 					windowProperty.setField(i, TimestampData.fromEpochMillis(((TimeWindow) currentWindow).getEnd()));
 					break;
 				case 2:
-					windowProperty.setField(i, TimestampData.fromEpochMillis(currentWindow.maxTimestamp()));
+					windowProperty.setField(i, TimestampData.fromEpochMillis(((TimeWindow) currentWindow).getEnd() - 1));
 					break;
+				case 3:
+					windowProperty.setField(i, TimestampData.fromEpochMillis(-1));
 			}
 		}
 	}

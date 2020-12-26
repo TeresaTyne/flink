@@ -27,10 +27,6 @@ import org.apache.flink.table.types.inference.TypeInference;
 import org.apache.flink.table.types.inference.TypeStrategies;
 import org.apache.flink.table.types.utils.TypeConversions;
 
-import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
 /**
  * The wrapper of user defined python aggregate function.
  */
@@ -41,21 +37,23 @@ public class PythonAggregateFunction extends AggregateFunction implements Python
 
 	private final String name;
 	private final byte[] serializedAggregateFunction;
-	private final TypeInformation[] inputTypes;
-	private final TypeInformation resultType;
-	private final TypeInformation accumulatorType;
+	private final DataType[] inputTypes;
+	private final DataType resultType;
+	private final DataType accumulatorType;
 	private final PythonFunctionKind pythonFunctionKind;
 	private final boolean deterministic;
 	private final PythonEnv pythonEnv;
+	private final boolean takesRowAsInput;
 
 	public PythonAggregateFunction(
 		String name,
 		byte[] serializedAggregateFunction,
-		TypeInformation[] inputTypes,
-		TypeInformation resultType,
-		TypeInformation accumulatorType,
+		DataType[] inputTypes,
+		DataType resultType,
+		DataType accumulatorType,
 		PythonFunctionKind pythonFunctionKind,
 		boolean deterministic,
+		boolean takesRowAsInput,
 		PythonEnv pythonEnv) {
 		this.name = name;
 		this.serializedAggregateFunction = serializedAggregateFunction;
@@ -65,6 +63,7 @@ public class PythonAggregateFunction extends AggregateFunction implements Python
 		this.pythonFunctionKind = pythonFunctionKind;
 		this.deterministic = deterministic;
 		this.pythonEnv = pythonEnv;
+		this.takesRowAsInput = takesRowAsInput;
 	}
 
 	public void accumulate(Object accumulator, Object... args) {
@@ -98,32 +97,34 @@ public class PythonAggregateFunction extends AggregateFunction implements Python
 	}
 
 	@Override
+	public boolean takesRowAsInput() {
+		return takesRowAsInput;
+	}
+
+	@Override
 	public boolean isDeterministic() {
 		return deterministic;
 	}
 
 	@Override
 	public TypeInformation getResultType() {
-		return resultType;
+		return TypeConversions.fromDataTypeToLegacyInfo(resultType);
 	}
 
 	@Override
 	public TypeInformation getAccumulatorType() {
-		return accumulatorType;
+		return TypeConversions.fromDataTypeToLegacyInfo(accumulatorType);
 	}
 
 	@Override
 	public TypeInference getTypeInference(DataTypeFactory typeFactory) {
 		TypeInference.Builder builder = TypeInference.newBuilder();
 		if (inputTypes != null) {
-			final List<DataType> argumentDataTypes = Stream.of(inputTypes)
-				.map(TypeConversions::fromLegacyInfoToDataType)
-				.collect(Collectors.toList());
-			builder.typedArguments(argumentDataTypes);
+			builder.typedArguments(inputTypes);
 		}
 		return builder
-			.outputTypeStrategy(TypeStrategies.explicit(TypeConversions.fromLegacyInfoToDataType(resultType)))
-			.accumulatorTypeStrategy(TypeStrategies.explicit(TypeConversions.fromLegacyInfoToDataType(accumulatorType)))
+			.outputTypeStrategy(TypeStrategies.explicit(resultType))
+			.accumulatorTypeStrategy(TypeStrategies.explicit(accumulatorType))
 			.build();
 	}
 
