@@ -97,8 +97,9 @@ class RowBasedOperationTests(object):
                  DataTypes.FIELD("b", DataTypes.STRING())]))
 
         table_sink = source_sink_utils.TestAppendSink(
-            ['a', 'b'],
-            [DataTypes.BIGINT(), DataTypes.STRING()])
+            ['a', 'b', 'c', 'd', 'e', 'f'],
+            [DataTypes.BIGINT(), DataTypes.STRING(), DataTypes.BIGINT(),
+             DataTypes.STRING(), DataTypes.BIGINT(), DataTypes.STRING()])
         self.t_env.register_table_sink("Results", table_sink)
 
         @udtf(result_types=[DataTypes.INT(), DataTypes.STRING()])
@@ -108,10 +109,13 @@ class RowBasedOperationTests(object):
 
         t.flat_map(split) \
             .flat_map(split) \
+            .join_lateral(split.alias("a", "b")) \
+            .left_outer_join_lateral(split.alias("c", "d")) \
             .execute_insert("Results") \
             .wait()
         actual = source_sink_utils.results()
-        self.assert_equals(actual, ["1,2", "1,3", "2,1", "1,5", "1,6", "1,7"])
+        self.assert_equals(actual, ["1,2,1,2,1,2", "1,3,1,3,1,3", "2,1,2,1,2,1",
+                                    "1,5,1,5,1,5", "1,6,1,6,1,6", "1,7,1,7,1,7"])
 
 
 class BatchRowBasedOperationITTests(RowBasedOperationTests, PyFlinkBlinkBatchTableTestCase):
@@ -233,7 +237,8 @@ class StreamRowBasedOperationITTests(RowBasedOperationTests, PyFlinkBlinkStreamT
             .aggregate(agg.alias("c", "d")) \
             .select("a, c, d") \
             .to_pandas()
-        assert_frame_equal(result, pd.DataFrame([[1, 3, 15], [2, 2, 4]], columns=['a', 'c', 'd']))
+        assert_frame_equal(result.sort_values('a').reset_index(drop=True),
+                           pd.DataFrame([[1, 3, 15], [2, 2, 4]], columns=['a', 'c', 'd']))
 
     def test_flat_aggregate(self):
         import pandas as pd
@@ -275,11 +280,11 @@ class StreamRowBasedOperationITTests(RowBasedOperationTests, PyFlinkBlinkStreamT
             .flat_aggregate(my_concat(t.b, ',').alias("b")) \
             .select(t.b, t.c) \
             .alias("a, c")
-        assert_frame_equal(result.to_pandas(),
-                           pd.DataFrame([["Hi,Hi2,Hi,Hi3,Hi3", "hi"],
-                                         ["Hi,Hi2,Hi,Hi3,Hi3", "hi"],
+        assert_frame_equal(result.to_pandas().sort_values('c').reset_index(drop=True),
+                           pd.DataFrame([["Hi,Hi,Hi2,Hi2,Hi3", "Hello"],
                                          ["Hi,Hi,Hi2,Hi2,Hi3", "Hello"],
-                                         ["Hi,Hi,Hi2,Hi2,Hi3", "Hello"]],
+                                         ["Hi,Hi2,Hi,Hi3,Hi3", "hi"],
+                                         ["Hi,Hi2,Hi,Hi3,Hi3", "hi"]],
                                         columns=['a', 'c']))
 
 

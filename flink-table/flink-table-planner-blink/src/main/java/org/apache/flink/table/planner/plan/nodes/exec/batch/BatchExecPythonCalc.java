@@ -16,23 +16,21 @@
  * limitations under the License.
  */
 
-package org.apache.flink.runtime.executiongraph;
+package org.apache.flink.table.planner.plan.nodes.exec.batch;
 
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.runtime.jobgraph.ScheduleMode;
-import org.apache.flink.runtime.jobmaster.slotpool.SlotProvider;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
+import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecPythonCalc;
+import org.apache.flink.table.types.logical.RowType;
 
-/**
- * Testing implementation of the {@link SlotProviderStrategy} which uses {@link ScheduleMode#LAZY_FROM_SOURCES}
- * and sets the allocation timeout to 10s.
- */
-public class TestingSlotProviderStrategy extends SlotProviderStrategy.NormalSlotProviderStrategy{
+import org.apache.calcite.rex.RexProgram;
 
-	private TestingSlotProviderStrategy(SlotProvider slotProvider, Time allocationTimeout) {
-		super(slotProvider, allocationTimeout);
-	}
+/** Batch {@link ExecNode} for Python ScalarFunctions. */
+public class BatchExecPythonCalc extends CommonExecPythonCalc implements BatchExecNode<RowData> {
 
-	public static TestingSlotProviderStrategy from(SlotProvider slotProvider) {
-		return new TestingSlotProviderStrategy(slotProvider, Time.seconds(10L));
-	}
+    public BatchExecPythonCalc(
+            RexProgram calcProgram, ExecEdge inputEdge, RowType outputType, String description) {
+        super(calcProgram, inputEdge, outputType, description);
+    }
 }
