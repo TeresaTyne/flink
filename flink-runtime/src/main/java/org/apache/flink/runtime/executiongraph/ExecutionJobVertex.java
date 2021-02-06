@@ -20,7 +20,6 @@ package org.apache.flink.runtime.executiongraph;
 
 import org.apache.flink.api.common.Archiveable;
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.InputDependencyConstraint;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.accumulators.AccumulatorHelper;
@@ -131,7 +130,6 @@ public class ExecutionJobVertex
             int defaultParallelism,
             int maxPriorAttemptsHistoryLength,
             Time timeout,
-            long initialGlobalModVersion,
             long createTimestamp)
             throws JobException {
 
@@ -195,7 +193,6 @@ public class ExecutionJobVertex
                             i,
                             producedDataSets,
                             timeout,
-                            initialGlobalModVersion,
                             createTimestamp,
                             maxPriorAttemptsHistoryLength);
 
@@ -365,10 +362,6 @@ public class ExecutionJobVertex
         return inputs;
     }
 
-    public InputDependencyConstraint getInputDependencyConstraint() {
-        return getJobVertex().getInputDependencyConstraint();
-    }
-
     public Collection<OperatorCoordinatorHolder> getOperatorCoordinators() {
         return operatorCoordinators;
     }
@@ -501,31 +494,6 @@ public class ExecutionJobVertex
     public void fail(Throwable t) {
         for (ExecutionVertex ev : getTaskVertices()) {
             ev.fail(t);
-        }
-    }
-
-    public void resetForNewExecution(final long timestamp, final long expectedGlobalModVersion)
-            throws GlobalModVersionMismatch {
-
-        synchronized (stateMonitor) {
-            // check and reset the sharing groups with scheduler hints
-            for (int i = 0; i < parallelism; i++) {
-                taskVertices[i].resetForNewExecution(timestamp, expectedGlobalModVersion);
-            }
-
-            // set up the input splits again
-            try {
-                if (this.inputSplits != null) {
-                    // lazy assignment
-                    @SuppressWarnings("unchecked")
-                    InputSplitSource<InputSplit> splitSource =
-                            (InputSplitSource<InputSplit>) jobVertex.getInputSplitSource();
-                    this.splitAssigner = splitSource.getInputSplitAssigner(this.inputSplits);
-                }
-            } catch (Throwable t) {
-                throw new RuntimeException(
-                        "Re-creating the input split assigner failed: " + t.getMessage(), t);
-            }
         }
     }
 

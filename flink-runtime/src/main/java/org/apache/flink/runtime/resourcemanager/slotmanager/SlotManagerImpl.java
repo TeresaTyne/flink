@@ -165,7 +165,8 @@ public class SlotManagerImpl implements SlotManager {
         this.defaultWorkerResourceSpec = slotManagerConfiguration.getDefaultWorkerResourceSpec();
         this.numSlotsPerWorker = slotManagerConfiguration.getNumSlotsPerWorker();
         this.defaultSlotResourceProfile =
-                generateDefaultSlotResourceProfile(defaultWorkerResourceSpec, numSlotsPerWorker);
+                SlotManagerUtils.generateDefaultSlotResourceProfile(
+                        defaultWorkerResourceSpec, numSlotsPerWorker);
         this.slotManagerMetricGroup = Preconditions.checkNotNull(slotManagerMetricGroup);
         this.maxSlotNum = slotManagerConfiguration.getMaxSlotNum();
         this.redundantTaskManagerNum = slotManagerConfiguration.getRedundantTaskManagerNum();
@@ -454,12 +455,17 @@ public class SlotManagerImpl implements SlotManager {
      *
      * @param taskExecutorConnection for the new task manager
      * @param initialSlotReport for the new task manager
+     * @param totalResourceProfile for the new task manager
+     * @param defaultSlotResourceProfile for the new task manager
      * @return True if the task manager has not been registered before and is registered
      *     successfully; otherwise false
      */
     @Override
     public boolean registerTaskManager(
-            final TaskExecutorConnection taskExecutorConnection, SlotReport initialSlotReport) {
+            final TaskExecutorConnection taskExecutorConnection,
+            SlotReport initialSlotReport,
+            ResourceProfile totalResourceProfile,
+            ResourceProfile defaultSlotResourceProfile) {
         checkInit();
 
         LOG.debug(
@@ -1340,19 +1346,6 @@ public class SlotManagerImpl implements SlotManager {
         if (null != request) {
             request.cancel(false);
         }
-    }
-
-    @VisibleForTesting
-    public static ResourceProfile generateDefaultSlotResourceProfile(
-            WorkerResourceSpec workerResourceSpec, int numSlotsPerWorker) {
-        return ResourceProfile.newBuilder()
-                .setCpuCores(workerResourceSpec.getCpuCores().divide(numSlotsPerWorker))
-                .setTaskHeapMemory(workerResourceSpec.getTaskHeapSize().divide(numSlotsPerWorker))
-                .setTaskOffHeapMemory(
-                        workerResourceSpec.getTaskOffHeapSize().divide(numSlotsPerWorker))
-                .setManagedMemory(workerResourceSpec.getManagedMemSize().divide(numSlotsPerWorker))
-                .setNetworkMemory(workerResourceSpec.getNetworkMemSize().divide(numSlotsPerWorker))
-                .build();
     }
 
     // ---------------------------------------------------------------------------------------------

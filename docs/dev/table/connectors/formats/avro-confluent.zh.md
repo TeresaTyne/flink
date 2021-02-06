@@ -35,7 +35,7 @@ Avro Schema Registry (``avro-confluent``) 格式能让你读取被 ``io.confluen
 
 当以这种格式写入（序列化）记录时，Avro schema 是从 table schema 中推断出来的，并会用来检索要与数据一起编码的 schema id。我们会在配置的 Confluent Schema Registry 中配置的 [subject](https://docs.confluent.io/current/schema-registry/index.html#schemas-subjects-and-topics) 下，检索 schema id。subject 通过 `avro-confluent.schema-registry.subject` 参数来制定。
 
-Avro Schema Registry 格式只能与[Apache Kafka SQL连接器]({% link dev/table/connectors/kafka.zh.md %})结合使用。
+The Avro Schema Registry format can only be used in conjunction with the [Apache Kafka SQL connector]({% link dev/table/connectors/kafka.zh.md %}) or the [Upsert Kafka SQL Connector]({% link dev/table/connectors/upsert-kafka.zh.md %}).
 
 依赖
 ------------
@@ -52,20 +52,124 @@ Avro Schema Registry 格式只能与[Apache Kafka SQL连接器]({% link dev/tabl
 
 <div class="codetabs" markdown="1">
 <div data-lang="SQL" markdown="1">
+
+Example of a table using raw UTF-8 string as Kafka key and Avro records registered in the Schema Registry as Kafka values:
+
 {% highlight sql %}
-CREATE TABLE user_behavior (
-  user_id BIGINT,
-  item_id BIGINT,
-  category_id BIGINT,
-  behavior STRING,
-  ts TIMESTAMP(3)
+CREATE TABLE user_created (
+
+  -- one column mapped to the Kafka raw UTF-8 key
+  the_kafka_key STRING,
+  
+  -- a few columns mapped to the Avro fields of the Kafka value
+  id STRING,
+  name STRING, 
+  email STRING
+
 ) WITH (
+
   'connector' = 'kafka',
+  'topic' = 'user_events_example1',
   'properties.bootstrap.servers' = 'localhost:9092',
-  'topic' = 'user_behavior'
-  'format' = 'avro-confluent',
-  'avro-confluent.schema-registry.url' = 'http://localhost:8081',
-  'avro-confluent.schema-registry.subject' = 'user_behavior'
+
+  -- UTF-8 string as Kafka keys, using the 'the_kafka_key' table column
+  'key.format' = 'raw',
+  'key.fields' = 'the_kafka_key',
+
+  'value.format' = 'avro-confluent',
+  'value.avro-confluent.schema-registry.url' = 'http://localhost:8082',
+  'value.fields-include' = 'EXCEPT_KEY'
+)
+{% endhighlight %}
+
+We can write data into the kafka table as follows:
+
+{% highlight sql %}
+INSERT INTO user_created
+SELECT
+  -- replicating the user id into a column mapped to the kafka key
+  id as the_kafka_key,
+
+  -- all values
+  id, name, email
+FROM some_table
+{% endhighlight %}
+
+---
+
+Example of a table with both the Kafka key and value registered as Avro records in the Schema Registry:
+
+{% highlight sql %}
+CREATE TABLE user_created (
+  
+  -- one column mapped to the 'id' Avro field of the Kafka key
+  kafka_key_id STRING,
+  
+  -- a few columns mapped to the Avro fields of the Kafka value
+  id STRING,
+  name STRING, 
+  email STRING
+  
+) WITH (
+
+  'connector' = 'kafka',
+  'topic' = 'user_events_example2',
+  'properties.bootstrap.servers' = 'localhost:9092',
+
+  -- Watch out: schema evolution in the context of a Kafka key is almost never backward nor
+  -- forward compatible due to hash partitioning.
+  'key.format' = 'avro-confluent',
+  'key.avro-confluent.schema-registry.url' = 'http://localhost:8082',
+  'key.fields' = 'kafka_key_id',
+
+  -- In this example, we want the Avro types of both the Kafka key and value to contain the field 'id'
+  -- => adding a prefix to the table column associated to the Kafka key field avoids clashes
+  'key.fields-prefix' = 'kafka_key_',
+
+  'value.format' = 'avro-confluent',
+  'value.avro-confluent.schema-registry.url' = 'http://localhost:8082',
+  'value.fields-include' = 'EXCEPT_KEY',
+   
+  -- subjects have a default value since Flink 1.13, though can be overriden:
+  'key.avro-confluent.schema-registry.subject' = 'user_events_example2-key2',
+  'value.avro-confluent.schema-registry.subject' = 'user_events_example2-value2'
+)
+{% endhighlight %}
+
+---
+Example of a table using the upsert connector with the Kafka value registered as an Avro record in the Schema Registry:
+
+{% highlight sql %}
+CREATE TABLE user_created (
+  
+  -- one column mapped to the Kafka raw UTF-8 key
+  kafka_key_id STRING,
+  
+  -- a few columns mapped to the Avro fields of the Kafka value
+  id STRING, 
+  name STRING, 
+  email STRING, 
+  
+  -- upsert-kafka connector requires a primary key to define the upsert behavior
+  PRIMARY KEY (kafka_key_id) NOT ENFORCED
+
+) WITH (
+
+  'connector' = 'upsert-kafka',
+  'topic' = 'user_events_example3',
+  'properties.bootstrap.servers' = 'localhost:9092',
+
+  -- UTF-8 string as Kafka keys
+  -- We don't specify 'key.fields' in this case since it's dictated by the primary key of the table
+  'key.format' = 'raw',
+  
+  -- In this example, we want the Avro types of both the Kafka key and value to contain the field 'id'
+  -- => adding a prefix to the table column associated to the kafka key field to avoid clashes
+  'key.fields-prefix' = 'kafka_key_',
+
+  'value.format' = 'avro-confluent',
+  'value.avro-confluent.schema-registry.url' = 'http://localhost:8082',
+  'value.fields-include' = 'EXCEPT_KEY'
 )
 {% endhighlight %}
 </div>
@@ -90,21 +194,21 @@ Format 参数
       <td>必选</td>
       <td style="word-wrap: break-word;">(none)</td>
       <td>String</td>
-      <td>指定要使用的格式，这里应该是 <code>'avro-confluent'</code>.</td>
+      <td>指定要使用的格式，这里应该是 <code>'avro-confluent'</code>。</td>
     </tr>
     <tr>
       <td><h5>avro-confluent.schema-registry.url</h5></td>
       <td>必选</td>
       <td style="word-wrap: break-word;">(none)</td>
       <td>String</td>
-      <td>用于获取/注册 schemas 的 Confluent Schema Registry 的URL </td>
+      <td>用于获取/注册 schemas 的 Confluent Schema Registry 的URL。</td>
     </tr>
     <tr>
       <td><h5>avro-confluent.schema-registry.subject</h5></td>
-      <td>sink 必选</td>
+      <td>可选</td>
       <td style="word-wrap: break-word;">(none)</td>
       <td>String</td>
-      <td>Confluent Schema Registry主题，用于在序列化期间注册此格式使用的 schema </td>
+      <td>Confluent Schema Registry 主题，用于在序列化期间注册此格式使用的 schema。默认 kafka 和 upsert-kafka 连接器会使用 "&lt;topic_name&gt;-value" 或者 "&lt;topic_name&gt;-key" 作为 subject 名字。但是对于其他连接器（如 filesystem）则在当做 sink 使用时需要显式指定 subject 名字。</td>
     </tr>
     </tbody>
 </table>

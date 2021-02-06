@@ -190,6 +190,12 @@ metadata fields for its value format.
       <td>The timestamp at which the connector processed the event. Corresponds to the <code>ts</code>
       field in the Canal record.</td>
     </tr>
+    <tr>
+      <td><code>event-timestamp</code></td>
+      <td><code>TIMESTAMP(3) WITH LOCAL TIME ZONE NULL</code></td>
+      <td>The timestamp when the corresponding change was executed in MySQL server. Corresponds to the <code>es</code>
+      field in the Canal record.</td>
+    </tr>
     </tbody>
 </table>
 
@@ -204,9 +210,11 @@ CREATE TABLE KafkaTable (
   origin_sql_type MAP<STRING, INT> METADATA FROM 'value.sql-type' VIRTUAL,
   origin_pk_names ARRAY<STRING> METADATA FROM 'value.pk-names' VIRTUAL,
   origin_ts TIMESTAMP(3) METADATA FROM 'value.ingestion-timestamp' VIRTUAL,
+  origin_es TIMESTAMP(3) METADATA FROM 'value.event-timestamp' VIRTUAL,
   user_id BIGINT,
   item_id BIGINT,
-  behavior STRING
+  behavior STRING,
+  WATERMARK FOR origin_es AS origin_es - INTERVAL '5' SECOND
 ) WITH (
   'connector' = 'kafka',
   'topic' = 'user_behavior',
@@ -281,18 +289,25 @@ Format Options
       <td>Specify string literal to replace null key when <code>'canal-json.map-null-key.mode'</code> is LITERAL.</td>
     </tr>        
     <tr>
+      <td><h5>canal-json.encode.decimal-as-plain-number</h5></td>
+      <td>optional</td>
+      <td style="word-wrap: break-word;">false</td>
+      <td>Boolean</td>
+      <td>Encode all decimals as plain numbers instead of possible scientific notations. By default, decimals may be written using scientific notation. For example, <code>0.000000027</code> is encoded as <code>2.7E-8</code> by default, and will be written as <code>0.000000027</code> if set this option to true.</td>
+    </tr>
+    <tr>
       <td><h5>canal-json.database.include</h5></td>
       <td>optional</td>
       <td style="word-wrap: break-word;">(none)</td>
       <td>String</td>
-      <td>Only read changelog rows which match the specific database (by comparing the "database" meta field in the Canal record).</td>
+      <td>An optional regular expression to only read the specific databases changelog rows by regular matching the "database" meta field in the Canal record. The pattern string is compatible with Java's <a href="https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html">Pattern</a>.</td>
     </tr>
     <tr>
       <td><h5>canal-json.table.include</h5></td>
       <td>optional</td>
       <td style="word-wrap: break-word;">(none)</td>
       <td>String</td>
-      <td>Only read changelog rows which match the specific table (by comparing the "table" meta field in the Canal record).</td>
+      <td>An optional regular expression to only read the specific tables changelog rows by regular matching the "table" meta field in the Canal record. The pattern string is compatible with Java's <a href="https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html">Pattern</a>.</td>
     </tr>
     </tbody>
 </table>

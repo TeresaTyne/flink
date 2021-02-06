@@ -59,7 +59,6 @@ import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.ScheduleMode;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointCoordinatorConfiguration;
-import org.apache.flink.runtime.jobmaster.slotpool.SlotProvider;
 import org.apache.flink.runtime.query.KvStateLocationRegistry;
 import org.apache.flink.runtime.scheduler.InternalFailuresListener;
 import org.apache.flink.runtime.scheduler.adapter.DefaultExecutionTopology;
@@ -68,6 +67,7 @@ import org.apache.flink.runtime.scheduler.strategy.SchedulingExecutionVertex;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingResultPartition;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingTopology;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
+import org.apache.flink.runtime.state.CheckpointStorage;
 import org.apache.flink.runtime.state.SharedStateRegistry;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.taskmanager.DispatcherThreadFactory;
@@ -183,9 +183,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
     /** The timeout for all messages that require a response/acknowledgement. */
     private final Time rpcTimeout;
 
-    /** The timeout for slot allocations. */
-    private final Time allocationTimeout;
-
     /** The classloader for the user code. Needed for calls into user code classes. */
     private final ClassLoader userClassLoader;
 
@@ -233,12 +230,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
     private final CompletableFuture<JobStatus> terminationFuture = new CompletableFuture<>();
 
     /**
-     * On each global recovery, this version is incremented. The version breaks conflicts between
-     * concurrent restart attempts by local failover strategies.
-     */
-    private long globalModVersion;
-
-    /**
      * The exception that caused the job to fail. This is set to the first root exception that was
      * not recoverable and triggered job failure.
      */
@@ -276,6 +267,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
     // ------ Fields that are only relevant for archived execution graphs ------------
     @Nullable private String stateBackendName;
 
+    @Nullable private String checkpointStorageName;
+
     private String jsonPlan;
 
     /** Shuffle master to register partitions for task deployment. */
@@ -294,10 +287,8 @@ public class ExecutionGraph implements AccessExecutionGraph {
             Executor ioExecutor,
             Time rpcTimeout,
             int maxPriorAttemptsHistoryLength,
-            SlotProvider slotProvider,
             ClassLoader userClassLoader,
             BlobWriter blobWriter,
-            Time allocationTimeout,
             PartitionReleaseStrategy.Factory partitionReleaseStrategyFactory,
             ShuffleMaster<?> shuffleMaster,
             JobMasterPartitionTracker partitionTracker,
@@ -334,14 +325,11 @@ public class ExecutionGraph implements AccessExecutionGraph {
         this.stateTimestamps[JobStatus.CREATED.ordinal()] = System.currentTimeMillis();
 
         this.rpcTimeout = checkNotNull(rpcTimeout);
-        this.allocationTimeout = checkNotNull(allocationTimeout);
 
         this.partitionReleaseStrategyFactory = checkNotNull(partitionReleaseStrategyFactory);
 
         this.kvStateLocationRegistry =
                 new KvStateLocationRegistry(jobInformation.getJobId(), getAllVertices());
-
-        this.globalModVersion = 1L;
 
         this.maxPriorAttemptsHistoryLength = maxPriorAttemptsHistoryLength;
 
@@ -388,10 +376,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
         return scheduleMode;
     }
 
-    public Time getAllocationTimeout() {
-        return allocationTimeout;
-    }
-
     @Nonnull
     public ComponentMainThreadExecutor getJobMasterMainThreadExecutor() {
         return jobMasterMainThreadExecutor;
@@ -407,6 +391,11 @@ public class ExecutionGraph implements AccessExecutionGraph {
         return Optional.ofNullable(stateBackendName);
     }
 
+    @Override
+    public Optional<String> getCheckpointStorageName() {
+        return Optional.ofNullable(checkpointStorageName);
+    }
+
     public void enableCheckpointing(
             CheckpointCoordinatorConfiguration chkConfig,
             List<ExecutionJobVertex> verticesToTrigger,
@@ -416,7 +405,9 @@ public class ExecutionGraph implements AccessExecutionGraph {
             CheckpointIDCounter checkpointIDCounter,
             CompletedCheckpointStore checkpointStore,
             StateBackend checkpointStateBackend,
-            CheckpointStatsTracker statsTracker) {
+            CheckpointStorage checkpointStorage,
+            CheckpointStatsTracker statsTracker,
+            CheckpointsCleaner checkpointsCleaner) {
 
         checkState(state == JobStatus.CREATED, "Job must be in CREATED state");
         checkState(checkpointCoordinator == null, "checkpointing already enabled");
@@ -468,9 +459,9 @@ public class ExecutionGraph implements AccessExecutionGraph {
                         operatorCoordinators,
                         checkpointIDCounter,
                         checkpointStore,
-                        checkpointStateBackend,
+                        checkpointStorage,
                         ioExecutor,
-                        new CheckpointsCleaner(),
+                        checkpointsCleaner,
                         new ScheduledExecutorServiceAdapter(checkpointCoordinatorTimer),
                         SharedStateRegistry.DEFAULT_FACTORY,
                         failureManager);
@@ -496,6 +487,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
         }
 
         this.stateBackendName = checkpointStateBackend.getClass().getSimpleName();
+        this.checkpointStorageName = checkpointStorage.getClass().getSimpleName();
     }
 
     @Nullable
@@ -809,7 +801,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
                             1,
                             maxPriorAttemptsHistoryLength,
                             rpcTimeout,
-                            globalModVersion,
                             createTimestamp);
 
             ejv.connectToPredecessors(this.intermediateResults);
@@ -864,8 +855,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
                     || current == JobStatus.RESTARTING) {
                 if (transitionState(current, JobStatus.CANCELLING)) {
 
-                    // make sure no concurrent local actions interfere with the cancellation
-                    final long globalVersionForRestart = incrementGlobalModVersion();
+                    incrementRestarts();
 
                     final CompletableFuture<Void> ongoingSchedulingFuture = schedulingFuture;
 
@@ -891,7 +881,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
                                     // trigger
                                     // restarts, so we need to pass a proper restart global version
                                     // here
-                                    allVerticesInTerminalState(globalVersionForRestart);
+                                    allVerticesInTerminalState();
                                 }
                             });
 
@@ -947,8 +937,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
         } else if (transitionState(state, JobStatus.SUSPENDED, suspensionCause)) {
             initFailureCause(suspensionCause);
 
-            // make sure no concurrent local actions interfere with the cancellation
-            incrementGlobalModVersion();
+            incrementRestarts();
 
             // cancel ongoing scheduling action
             if (schedulingFuture != null) {
@@ -1053,15 +1042,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
         }
     }
 
-    /**
-     * Gets the current global modification version of the ExecutionGraph. The global modification
-     * version is incremented with each global action (cancel/fail/restart) and is used to
-     * disambiguate concurrent modifications between local and global failover actions.
-     */
-    public long getGlobalModVersion() {
-        return globalModVersion;
-    }
-
     // ------------------------------------------------------------------------
     //  State Transitions
     // ------------------------------------------------------------------------
@@ -1100,11 +1080,6 @@ public class ExecutionGraph implements AccessExecutionGraph {
         } else {
             return false;
         }
-    }
-
-    private long incrementGlobalModVersion() {
-        incrementRestarts();
-        return ++globalModVersion;
     }
 
     public void incrementRestarts() {
@@ -1164,7 +1139,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
      * This method is a callback during cancellation/failover and called when all tasks have reached
      * a terminal state (cancelled/failed/finished).
      */
-    private void allVerticesInTerminalState(long expectedGlobalVersionForRestart) {
+    private void allVerticesInTerminalState() {
 
         assertRunningInJobMasterMainThread();
 
@@ -1230,7 +1205,7 @@ public class ExecutionGraph implements AccessExecutionGraph {
             CheckpointCoordinator coord = this.checkpointCoordinator;
             this.checkpointCoordinator = null;
             if (coord != null) {
-                coord.shutdown(status);
+                coord.shutdown();
             }
             if (checkpointCoordinatorTimer != null) {
                 checkpointCoordinatorTimer.shutdownNow();
